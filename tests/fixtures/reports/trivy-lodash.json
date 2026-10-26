@@ -1,0 +1,28 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "web",
+  "ArtifactType": "filesystem",
+  "Results": [
+    {
+      "Target": "package-lock.json",
+      "Class": "lang-pkgs",
+      "Type": "npm",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2021-23337",
+          "PkgName": "lodash",
+          "InstalledVersion": "4.17.15",
+          "FixedVersion": "4.17.21",
+          "Severity": "HIGH"
+        },
+        {
+          "VulnerabilityID": "CVE-2020-8203",
+          "PkgName": "lodash",
+          "InstalledVersion": "4.17.15",
+          "FixedVersion": "4.17.19",
+          "Severity": "HIGH"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+ "_meta": {
+  "hash": {
+   "sha256": "x"
+  }
+ },
+ "default": {
+  "requests": {
+   "version": "==2.25.0"
+  },
+  "mylib": {
+   "git": "https://github.com/me/mylib.git",
+   "ref": "abc"
+  }
+ },
+ "develop": {
+  "pytest": {
+   "version": "==7.0.0"
+  }
+ }
+}

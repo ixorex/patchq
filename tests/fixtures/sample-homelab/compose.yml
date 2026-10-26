@@ -1,0 +1,15 @@
+# homelab stack
+services:
+  proxy:
+    image: nginx:1.25-alpine
+    ports:
+      - "443:443"
+    restart: unless-stopped
+  legacy:
+    image: example/legacy-shell:1.0   # old box we haven't retired
+    ports: ["8080:80"]
+    environment:
+      - MODE=prod
+  app:
+    build: ./web
+    depends_on: [proxy]

@@ -1,0 +1,64 @@
+{
+  "descriptor": {
+    "name": "grype",
+    "version": "0.80.0"
+  },
+  "source": {
+    "type": "directory",
+    "target": "web"
+  },
+  "matches": [
+    {
+      "vulnerability": {
+        "id": "GHSA-35jh-r3h4-6jhm",
+        "fix": {
+          "versions": [
+            "4.17.21"
+          ],
+          "state": "fixed"
+        }
+      },
+      "relatedVulnerabilities": [
+        {
+          "id": "CVE-2021-23337"
+        }
+      ],
+      "artifact": {
+        "name": "lodash",
+        "version": "4.17.15",
+        "type": "npm",
+        "locations": [
+          {
+            "path": "/package-lock.json"
+          }
+        ]
+      }
+    },
+    {
+      "vulnerability": {
+        "id": "GHSA-p6mc-m468-83gw",
+        "fix": {
+          "versions": [
+            "4.17.19"
+          ],
+          "state": "fixed"
+        }
+      },
+      "relatedVulnerabilities": [
+        {
+          "id": "CVE-2020-8203"
+        }
+      ],
+      "artifact": {
+        "name": "lodash",
+        "version": "4.17.15",
+        "type": "npm",
+        "locations": [
+          {
+            "path": "/package-lock.json"
+          }
+        ]
+      }
+    }
+  ]
+}

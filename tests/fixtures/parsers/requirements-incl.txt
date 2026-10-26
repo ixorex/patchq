@@ -1,0 +1,5 @@
+-r base.txt
+-r requirements-base.txt
+itsdangerous==2.0.0  # pinned
+werkzeug[watchdog]==2.0.0
+foo==1.*

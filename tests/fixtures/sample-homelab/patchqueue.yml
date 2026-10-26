@@ -1,0 +1,7 @@
+systems:
+  legacy:
+    exposed: true
+    critical: true
+  web: {exposed: true}
+  proxy:
+    exposed: true

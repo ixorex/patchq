@@ -1,0 +1,28 @@
+{
+  "_note": "test fixture: subset shaped like the CISA KEV feed; dates illustrative",
+  "catalogVersion": "fixture",
+  "dateReleased": "2026-10-26T00:00:00Z",
+  "count": 2,
+  "vulnerabilities": [
+    {
+      "cveID": "CVE-2014-6271",
+      "vendorProject": "GNU",
+      "product": "Bourne-Again Shell (Bash)",
+      "vulnerabilityName": "GNU Bash Arbitrary Code Execution Vulnerability",
+      "dateAdded": "2022-01-28",
+      "dueDate": "2022-07-28",
+      "knownRansomwareCampaignUse": "Unknown",
+      "requiredAction": "Apply updates per vendor instructions."
+    },
+    {
+      "cveID": "CVE-2014-0160",
+      "vendorProject": "OpenSSL",
+      "product": "OpenSSL",
+      "vulnerabilityName": "OpenSSL Information Disclosure Vulnerability",
+      "dateAdded": "2022-05-04",
+      "dueDate": "2022-05-25",
+      "knownRansomwareCampaignUse": "Unknown",
+      "requiredAction": "Apply updates per vendor instructions."
+    }
+  ]
+}

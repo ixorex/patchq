@@ -1,0 +1,24 @@
+{
+ "name": "legacy",
+ "lockfileVersion": 1,
+ "dependencies": {
+  "express": {
+   "version": "4.16.0",
+   "dependencies": {
+    "qs": {
+     "version": "6.5.1"
+    }
+   }
+  },
+  "qs": {
+   "version": "6.5.2"
+  },
+  "mocha": {
+   "version": "5.0.0",
+   "dev": true
+  },
+  "private-lib": {
+   "version": "github:me/private-lib#abc123"
+  }
+ }
+}

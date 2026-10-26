@@ -1,0 +1,13 @@
+{
+ "name": "nolock",
+ "dependencies": {
+  "lodash": "^4.17.15",
+  "axios": "0.21.1",
+  "left": "*",
+  "mine": "file:../mine",
+  "next": ">=13.0.0"
+ },
+ "devDependencies": {
+  "jest": "~29.0.0"
+ }
+}

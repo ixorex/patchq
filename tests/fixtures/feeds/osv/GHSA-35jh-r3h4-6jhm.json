@@ -1,0 +1,36 @@
+{
+  "id": "GHSA-35jh-r3h4-6jhm",
+  "aliases": [
+    "CVE-2021-23337"
+  ],
+  "summary": "Command Injection in lodash",
+  "modified": "2026-01-01T00:00:00Z",
+  "affected": [
+    {
+      "package": {
+        "ecosystem": "npm",
+        "name": "lodash"
+      },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [
+            {
+              "introduced": "0"
+            },
+            {
+              "fixed": "4.17.21"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "references": [],
+  "severity": [
+    {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+    }
+  ]
+}

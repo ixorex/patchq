@@ -1,0 +1,93 @@
+{
+  "results": [
+    {
+      "source": {
+        "path": "/srv/web/package-lock.json",
+        "type": "lockfile"
+      },
+      "packages": [
+        {
+          "package": {
+            "name": "lodash",
+            "version": "4.17.15",
+            "ecosystem": "npm"
+          },
+          "vulnerabilities": [
+            {
+              "id": "GHSA-35jh-r3h4-6jhm",
+              "aliases": [
+                "CVE-2021-23337"
+              ],
+              "summary": "Command Injection in lodash",
+              "modified": "2026-01-01T00:00:00Z",
+              "affected": [
+                {
+                  "package": {
+                    "ecosystem": "npm",
+                    "name": "lodash"
+                  },
+                  "ranges": [
+                    {
+                      "type": "SEMVER",
+                      "events": [
+                        {
+                          "introduced": "0"
+                        },
+                        {
+                          "fixed": "4.17.21"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "references": [],
+              "severity": [
+                {
+                  "type": "CVSS_V3",
+                  "score": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+                }
+              ]
+            },
+            {
+              "id": "GHSA-p6mc-m468-83gw",
+              "aliases": [
+                "CVE-2020-8203"
+              ],
+              "summary": "Prototype Pollution in lodash",
+              "modified": "2026-01-01T00:00:00Z",
+              "affected": [
+                {
+                  "package": {
+                    "ecosystem": "npm",
+                    "name": "lodash"
+                  },
+                  "ranges": [
+                    {
+                      "type": "SEMVER",
+                      "events": [
+                        {
+                          "introduced": "3.7.0"
+                        },
+                        {
+                          "fixed": "4.17.19"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "references": [],
+              "severity": [
+                {
+                  "type": "CVSS_V3",
+                  "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

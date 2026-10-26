@@ -1,0 +1,24 @@
+{
+  "npm|lodash|4.17.15": [
+    "GHSA-35jh-r3h4-6jhm",
+    "GHSA-p6mc-m468-83gw"
+  ],
+  "npm|minimist|1.2.5": [
+    "GHSA-xvch-5gv4-984h"
+  ],
+  "npm|mkdirp|0.5.5": [],
+  "PyPI|Django|3.2.0": [
+    "CVE-2021-35042"
+  ],
+  "PyPI|jinja2|2.10": [
+    "CVE-2019-10906",
+    "CVE-2024-22195"
+  ],
+  "PyPI|PyYAML|5.3": [
+    "CVE-2020-14343"
+  ],
+  "PyPI|certifi|2022.12.7": [
+    "CVE-2023-37920"
+  ],
+  "PyPI|pytest|7.4.0": []
+}

@@ -1,0 +1,12 @@
+web:
+  image: "ghcr.io/me/web:2.1"
+  ports:
+    - 80:80
+db:
+  image: postgres:${PG_TAG:-16}
+  # comment with image: fake:1.0
+cache:
+  image: &redis redis:7.2
+  command: >
+    redis-server
+    --appendonly yes
