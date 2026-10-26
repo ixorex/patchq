@@ -13,6 +13,16 @@ PatchQ makes a decision. It does not send alerts or dump 200 unordered findings 
 Free, MIT-licensed, no account, no telemetry, standard-library Python only.
 
 
+## What's new in 0.2
+
+- **`patchq init`**: one-time guided setup that finds your projects, asks a few questions, and handles the rest.
+- **Running containers**: `patchq scan --docker` checks the images of containers running right now (via Trivy).
+- **One action per package**: the queue groups CVEs by package and shows which upgrade clears how many.
+- **Dashboard with buttons**: Scan now, mark patched / defer / not affected, and change the schedule from the browser.
+- **Always on**: background dashboard and daily/weekly scans via `systemd --user` (cron fallback).
+
+Full list in [CHANGELOG.md](CHANGELOG.md).
+
 ## Quickstart (about 2 minutes)
 
 ```bash
