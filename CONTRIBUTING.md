@@ -8,7 +8,7 @@ PatchQ is maintained solo in a few hours a week. Contributions that keep it smal
 python3 -m unittest discover -s tests -t .
 ```
 
-Standard library only: no pytest, no network. Tested on Python 3.9, 3.10 and 3.13. Network calls are blocked in tests (`tests/helpers.py`), and feed data comes from `tests/fixtures/feeds/`.
+Standard library only: no pytest, no network. Tested on Python 3.9, 3.10, 3.13 and 3.14. Network calls are blocked in tests (`tests/helpers.py`), and feed data comes from `tests/fixtures/feeds/`.
 
 ## How the feeds update
 

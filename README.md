@@ -13,80 +13,109 @@ PatchQ makes a decision. It does not send alerts or dump 200 unordered findings 
 Free, MIT-licensed, no account, no telemetry, standard-library Python only.
 
 
-## Install
+## Quickstart (about 2 minutes)
 
 ```bash
-pipx install git+https://github.com/ixorex/patchq.git     # recommended
-patchq scan .
+pipx install git+https://github.com/ixorex/patchq.git
+patchq init
 ```
 
-Fallbacks:
+`patchq init` walks you through setup in about a minute:
+
+1. **Finds what to scan.** It looks in your home folder, `/opt` and `/srv` for compose files and lockfiles, and you pick which folders to include.
+2. **Running containers.** If Docker or Podman is installed, it offers to scan the containers running right now (uses Trivy).
+3. **Automatic scans.** Daily, weekly or off, at a time you choose.
+4. **Dashboard.** It keeps the dashboard running in the background at http://127.0.0.1:8765.
+
+Then it runs the first scan. After that you don't need to type anything: scans happen on schedule and the dashboard is always up. Open the dashboard to see what to patch, mark things patched / deferred / not affected, change the schedule, or hit **Scan now**.
+
+On a headless box (Pi, server), view the dashboard from your PC through SSH:
+
+```bash
+ssh -N -L 8765:127.0.0.1:8765 you@your-server     # then open http://127.0.0.1:8765
+```
+
+Needs Python 3.9+. Built for Linux; macOS should work but is untested. Background services use `systemd --user`; where that's missing, `init` prints a cron line instead. Container scanning needs [Trivy](https://trivy.dev) (`sudo apt install trivy` on Kali; other distros see trivy.dev).
+
+Other ways to install:
 
 ```bash
 pip install git+https://github.com/ixorex/patchq.git
-
-git clone https://github.com/ixorex/patchq.git
-cd patchq
-python3 -m patchqueue scan .
+git clone https://github.com/ixorex/patchq.git && cd patchq && python3 -m patchqueue init
 ```
 
-Needs Python 3.9+ and `git` (only for scanning git URLs or `--pull`). Built for Linux; macOS should work but is untested.
-
-## Use it
+## Commands
 
 ```bash
-patchq scan ~/homelab                       # walk a folder, build the queue
+patchq init                                 # guided setup (re-run any time to change it)
+patchq scan                                 # scan everything init set up
+patchq scan ~/homelab                       # or scan one folder right now
+patchq scan --docker                        # include containers running on this machine
 patchq scan https://github.com/me/app.git   # shallow-clone (https/ssh), then scan
 patchq scan . --pull                        # git pull --ff-only first
 patchq scan . --import trivy-nginx.json     # include a Trivy / Grype / OSV-Scanner report
-patchq queue                                # show the queue again (no network)
+patchq queue                                # one line per package, with upgrade options
+patchq queue --by-cve                       # one line per CVE
 patchq queue --all                          # expand Watching + decision history
 patchq done   CVE-2021-23337
 patchq defer  CVE-2014-6271 --reason "box retired next sprint" --recheck 2026-11-15
 patchq ignore CVE-2020-8203 --reason "zipObjectDeep never called" [--recheck 2027-01-01]
-patchq serve                                # dashboard at http://127.0.0.1:8765 (read-only)
+patchq reopen CVE-2020-8203                 # put it back in the queue (history kept)
+patchq serve                                # dashboard in the foreground
+patchq service status|install|uninstall     # background dashboard + scheduled scans
 ```
+
+**One action per package.** Forty CVEs in one old Django are one decision, so the queue groups them by package and offers up to three upgrade targets:
+- stay on your minor line
+- stay on your major version
+- newest fix
+
+Each target shows how many of the advisories it clears and its breaks-risk. `--by-cve` shows the per-advisory view.
 
 Decisions are stored in `~/.patchqueue/queue.json` with their full history. Six months from now, `patchq queue --all` still tells you why something was ignored. Re-running `scan` keeps every decision. If you mark something done but it is still in your lockfile, PatchQ says so instead of hiding it.
 
 ## Example output
 
-This is real output from `tests/fixtures/sample-homelab`. It ran offline against the test fixture feeds, so the EPSS/KEV numbers are illustrative.
+This is real output from `tests/fixtures/sample-homelab` (default grouped view; `--by-cve` lists each advisory). It ran offline against the test fixture feeds, so the EPSS/KEV numbers are illustrative.
 
 ```
-PatchQ 0.1.0 — scan for: homelab (scanned 2026-10-26 17:53)
-Data as of (UTC): OSV 2026-10-26 17:53 (cache) · KEV 2026-10-26 17:53 (cache) · EPSS 2026-10-26 17:53 (cache) · NVD —
+PatchQ 0.2.0 — scan for: homelab (scanned 2026-10-26 20:34)
+Data as of (UTC): OSV 2026-10-26 20:34 (cache) · KEV 2026-10-26 20:34 (cache) · EPSS 2026-10-26 20:34 (cache) · NVD —
 
-Heads-up (5):
-  • old-frontend/yarn.lock: Yarn lockfiles aren't parsed in v1 — run `osv-scanner --format json -L yarn.lock > osv-scanner.json` and PatchQ will import it
-  • 1 image(s) found but NOT checked — PatchQ needs a Trivy/Grype report for image contents. Run `trivy image --format json -o trivy-nginx-1.25-alpine.json nginx:1.25-alpine` in this folder; PatchQ picks up trivy*/grype*.json automatically.
+PATCH TODAY · 2 packages
+  1  openssl 1.0.1e-2+deb7u4  (Debian) · 1 vuln · CISA KEV · top EPSS 0.974
+     where  legacy (trivy-legacy.json)  [exposed, critical]
+     why    worst: CVE-2014-0160 — Tier 0 (Patch Today): in CISA KEV — confirmed exploited (added 2022-05-04, CISA due 2022-05-25); fix available. EPSS 0.974 · CVSS 7.5.
+     fix    → 1.0.1e-2+deb7u5  breaks risk: low — patch bump
+            apt-get update && apt-get install -y --only-upgrade openssl
   …
 
-PATCH TODAY · 2
-  1  CVE-2014-0160  openssl 1.0.1e-2+deb7u4 → 1.0.1e-2+deb7u5   breaks risk: low — patch bump
-     where  legacy (trivy-legacy.json → example/legacy-shell:1.0 (debian 7.11))  [exposed, critical]
-     why    Tier 0 (Patch Today): in CISA KEV — confirmed exploited (added 2022-05-04, CISA due 2022-05-25); fix available. EPSS 0.974 · CVSS 7.5.
-     fix    apt-get update && apt-get install -y --only-upgrade openssl
-            add to the image's Dockerfile as a RUN step and rebuild (inside image example/legacy-shell:1.0) — or move to a newer base image tag
-  2  CVE-2014-6271  bash 4.2+dfsg-0.1 → 4.2+dfsg-0.1+deb7u1   breaks risk: low — patch bump
-     …
-
-THIS WEEK · 4
-  3  CVE-2020-14343  PyYAML 5.3 → 5.4   breaks risk: medium — minor bump
-     where  api (api/requirements.txt)
-     why    Tier 1 (This Week): EPSS 0.12 ≥ 0.10 (≈12% chance of exploitation in the next 30 days); fix available. EPSS 0.120 · CVSS 9.8.
-     fix    cd ~/homelab/api && pip install PyYAML==5.4
-            then change the pin in api/requirements.txt to PyYAML==5.4
-  4  CVE-2021-44906  minimist 1.2.5 → 1.2.6   breaks risk: low — patch bump
-     where  web (web/package-lock.json) [transitive]  [exposed]
-     why    Tier 1 (This Week): CVSS 9.8 ≥ 7.0; fix available; +1 tier: web marked exposed in patchqueue.yml. EPSS 0.008 · CVSS 9.8.
-     fix    cd ~/homelab/web && npm update minimist
-            transitive dependency: if the lockfile still shows < 1.2.6, add "overrides": {"minimist": "1.2.6"} to package.json and run npm install
+THIS WEEK · 3 packages
+  5  lodash 4.17.15  (npm) · 2 vulns (2 This Week) · top EPSS 0.006
+     where  web (web/package-lock.json)  [exposed]
+     why    worst: CVE-2021-23337 — Tier 1 (This Week): CVSS 7.2 ≥ 7.0; fix available; +1 tier: web marked exposed in patchqueue.yml. EPSS 0.006 · CVSS 7.2.
+     fix    → 4.17.21  clears all 2  breaks risk: low — patch bump
+            cd ~/homelab/web && npm install lodash@4.17.21
+     ids    CVE-2021-23337, CVE-2020-8203   (`patchq queue --by-cve` for each one)
   …
 
-WATCHING · 2  (collapsed — `patchq queue --all` for full detail)
- 10  CVE-2024-22195  jinja2 2.10 → 3.1.3  ·  recheck: next scan
- 11  CVE-2011-3374  apt 0.9.7.9+deb7u7 → no fix yet  ·  recheck: next scan — no fix yet
+THIS SPRINT / PLAN · 3 packages
+  7  jinja2 2.10  (PyPI) · 2 vulns (1 Sprint, 1 Watching) · top EPSS 0.003
+     where  api (api/requirements.txt); worker (worker/poetry.lock)
+     why    worst: CVE-2019-10906 — Tier 2 (This Sprint / Plan): CVSS 8.6 ≥ 7.0; fix available. EPSS 0.003 · CVSS 8.6.
+     upgrade options:
+       → 2.10.1  clears 1 of 2  (same minor line)  breaks risk: low — patch bump
+         cd ~/homelab/api && pip install jinja2==2.10.1
+         cd ~/homelab/worker && poetry add 'jinja2>=2.10.1'
+         then change the pin in api/requirements.txt to jinja2==2.10.1
+       → 3.1.3  clears all 2  (newest fix)  breaks risk: high — major bump, test in staging
+         cd ~/homelab/api && pip install jinja2==3.1.3
+         cd ~/homelab/worker && poetry add 'jinja2>=3.1.3'
+         then change the pin in api/requirements.txt to jinja2==3.1.3
+  …
+
+WATCHING · 1 package  (collapsed — `patchq queue --all`)
+  9  apt 0.9.7.9+deb7u7  (Debian) · 1 vuln · top EPSS 0.001  → no fix yet
 
 PatchQ is a triage aid, not a guarantee. It ranks what it can see from public feeds. It cannot see private advisories, zero-days, or code you didn't tell it about.
 ```
@@ -145,11 +174,22 @@ Everything is cached in `~/.patchqueue/cache/`: KEV and EPSS daily, OSV 24h, NVD
 
 ## Dashboard
 
-`patchq serve` serves the same `queue.json` through the same ranking code. It binds to 127.0.0.1 only, rejects foreign Host headers (DNS rebinding), runs no JavaScript, and is read-only. Actions stay in the CLI, so a malicious web page can't change your queue.
+`patchq serve` (or the background service from `init`) shows the same queue through the same ranking code. You can:
 
-## Roadmap (not in v1)
+- scan now
+- mark items patched, deferred or not affected, and reopen them
+- change the scan schedule
 
-PyPI release (`pip install patchq`), GitHub Releases binaries, Homebrew; Go / Rust / Ruby / PHP lockfiles; CycloneDX / SPDX SBOM import; SARIF import; a GitHub Action that fails only on Tier 0; an auto-PR that opens (never merges) upgrades.
+Security:
+
+- **Local only.** It binds to 127.0.0.1 and rejects foreign Host headers (DNS rebinding).
+- **Protected actions.** Every action needs a per-session form token and a same-origin request, so another website can't drive it.
+- **Locked-down page.** No JavaScript, strict security headers, and everything is HTML-escaped.
+- **Folders stay out of the browser.** Which folders get scanned can only be changed with `patchq init` in a terminal.
+
+## Roadmap
+
+PyPI release (`pip install patchq`), GitHub Releases binaries, Homebrew; notifications (ntfy / Discord / email) when something lands in Patch Today; Go / Rust / Ruby / PHP lockfiles; CycloneDX / SPDX SBOM import; SARIF import; a GitHub Action that fails only on Tier 0; an auto-PR that opens (never merges) upgrades.
 
 Never planned: network scanning, auto-patching, auto-merging, Windows OS patching, enterprise dashboards, an AI chatbot.
 

@@ -153,3 +153,117 @@ def render_queue(ranked, scans, sources, warnings=(), color=False, show_all=Fals
     out.append("")
     out.append(p(DISCLAIMER, "dim"))
     return "\n".join(out)
+
+
+def _header(p, scans, sources, warnings, title):
+    out = []
+    labels = ", ".join(f"{os.path.basename(s.get('label', '').rstrip('/')) or s.get('label')} "
+                       f"(scanned {s.get('scanned_at', '')[:16].replace('T', ' ')})" for s in scans)
+    out.append(p(f"PatchQ {__version__}", "bold") + f" — {title} for: {labels or 'nothing scanned yet'}")
+    out += source_line(sources)
+    if warnings:
+        out.append("")
+        out.append(p(f"Heads-up ({len(warnings)}):", "yellow"))
+        for w in warnings:
+            out.append(f"  • {_clean(w)}")
+    return out
+
+
+def _group_where(g):
+    out = []
+    for loc in g["locations"][:3]:
+        s = loc.get("system") or "?"
+        if loc.get("file"):
+            s += f" ({loc['file']})"
+        if loc.get("direct") is False:
+            s += " [transitive]"
+        out.append(s)
+    more = len(g["locations"]) - 3
+    flags = [f for f, on in (("exposed", g["exposed"]), ("critical", g["critical"])) if on]
+    return _clean("; ".join(out) + (f" (+{more} more)" if more > 0 else "")) + (f"  [{', '.join(flags)}]" if flags else "")
+
+
+def _group_summary(g):
+    names = {0: "Today", 1: "This Week", 2: "Sprint", 3: "Watching"}
+    parts = [f"{n} {names[t]}" for t, n in sorted(g["by_tier"].items())]
+    noun = "vuln" if g["count"] == 1 else "vulns"
+    s = f"{g['count']} {noun}"
+    if g["count"] > 1:
+        s += " (" + ", ".join(parts) + ")"
+    if g["kev"]:
+        s += " · CISA KEV"
+    if g["max_epss"] is not None:
+        s += f" · top EPSS {g['max_epss']:.3f}"
+    return s
+
+
+def render_group(n, g, p, full=True):
+    best = g["best"]
+    head = (f"{n:>3}  {p(_clean(g['package']), 'bold')} {_clean(g['installed'])}  "
+            f"({_clean(g['ecosystem'])}) · {_group_summary(g)}")
+    if not full:
+        tgt = g["targets"][-1]["version"] if g["targets"] else "no fix yet"
+        return [f"{head}  → {_clean(tgt)}"]
+    lines = [head, f"     where  {_group_where(g)}",
+             f"     why    worst: {_clean(best['id'])} — {_clean(best['why'])}"]
+    for note in g["notes"]:
+        lines.append(f"     note   {p(_clean(note), 'magenta')}")
+    single = len(g["targets"]) == 1
+    if g["targets"] and not single:
+        lines.append("     upgrade options:")
+    for t in g["targets"]:
+        br = t["breaks"]
+        clears = f"clears all {t['of']}" if t["clears"] == t["of"] and t["of"] > 1 else (
+            "" if t["of"] == 1 else f"clears {t['clears']} of {t['of']}")
+        scope = "" if single else f"  ({t['scope']})"
+        head = f"→ {p(_clean(t['version']), 'bold')}" + (f"  {clears}" if clears else "") + scope \
+            + f"  breaks risk: {p(br['label'], *BREAK_STYLE.get(br['kind'], ()))}"
+        lines.append(("     fix    " if single else "       ") + head)
+        pad = "            " if single else "         "
+        for cmd in (t["fix_cmd"] or "").splitlines():
+            lines.append(pad + p(cmd, "green"))
+        if t.get("fix_note"):
+            lines.append(pad + _clean(t["fix_note"]))
+    if g["no_fix"]:
+        lines.append(f"     no fix yet for: {_clean(', '.join(g['no_fix'][:6]))}"
+                     + (" …" if len(g["no_fix"]) > 6 else "") + " — mitigate / isolate / watch")
+    if g["count"] > 1:
+        ids = [i["id"] for i in g["items"]]
+        lines.append(p(f"     ids    {_clean(', '.join(ids[:6]))}{' …' if len(ids) > 6 else ''}"
+                       "   (`patchq queue --by-cve` for each one)", "dim"))
+    return lines
+
+
+def render_grouped(groups, decided, scans, sources, warnings=(), color=False, show_all=False, title="queue"):
+    p = Painter(color)
+    out = _header(p, scans, sources, warnings, title)
+    names = {0: "PATCH TODAY", 1: "THIS WEEK", 2: "THIS SPRINT / PLAN", 3: "WATCHING"}
+    n = 0
+    for t in range(4):
+        rows = [g for g in groups if g["tier"] == t]
+        out.append("")
+        label = f"{names[t]} · {len(rows)} package{'s' if len(rows) != 1 else ''}"
+        if t == 3:
+            label += f" · {len(decided)} decided" if decided else ""
+            out.append(p(label, *TIER_STYLE[t]) + ("" if show_all else "  (collapsed — `patchq queue --all`)"))
+        else:
+            out.append(p(label, *TIER_STYLE[t]))
+        if not rows and not (t == 3 and decided):
+            out.append("     (nothing)")
+            continue
+        for g in rows:
+            n += 1
+            out += render_group(n, g, p, full=(t < 3 or show_all))
+        if t == 3:
+            for r in decided:
+                n += 1
+                if show_all:
+                    out += render_item(n, r, p)
+                    for h in (r.get("decision") or {}).get("history") or []:
+                        out.append(f"            history: {h.get('at', '')[:10]} {h.get('status')} — "
+                                   f"{_clean(h.get('reason') or '')}")
+                else:
+                    out.append(_watch_line(n, r, p))
+    out.append("")
+    out.append(p(DISCLAIMER, "dim"))
+    return "\n".join(out)

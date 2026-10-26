@@ -7,6 +7,7 @@ Every decision keeps its full history, so six months from now
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 
@@ -14,7 +15,7 @@ from . import model
 from .sources import cache
 
 SCHEMA = 1
-STATUSES = ("patched", "deferred", "not_affected")
+STATUSES = ("patched", "deferred", "not_affected", "reopened")  # reopened = back in the queue, history kept
 
 
 class StateError(RuntimeError):
@@ -43,6 +44,52 @@ def load() -> dict:
 
 def save(data: dict) -> None:
     cache.write_json(path(), data)
+
+
+try:  # POSIX file locks; on Windows we fall back to no locking (single-user tool)
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover
+    _fcntl = None
+
+
+@contextlib.contextmanager
+def _flock(name: str, blocking: bool = True):
+    p = cache.home() / name
+    fh = open(p, "a+")
+    try:
+        if _fcntl is not None:
+            flags = _fcntl.LOCK_EX | (0 if blocking else _fcntl.LOCK_NB)
+            try:
+                _fcntl.flock(fh, flags)
+            except BlockingIOError:
+                raise Busy()
+        yield
+    finally:
+        if _fcntl is not None:
+            try:
+                _fcntl.flock(fh, _fcntl.LOCK_UN)
+            except OSError:
+                pass
+        fh.close()
+
+
+class Busy(RuntimeError):
+    """Another scan is already running."""
+
+
+@contextlib.contextmanager
+def transaction():
+    """Load -> modify -> save under a lock, so the timer, the dashboard and the CLI
+    never overwrite each other's decisions."""
+    with _flock(".queue.lock"):
+        data = load()
+        yield data
+        save(data)
+
+
+def scan_lock(blocking: bool = False):
+    """Held for the whole duration of a scan run. Raises Busy if one is running."""
+    return _flock(".scan.lock", blocking=blocking)
 
 
 def record_scan(data: dict, rec: dict) -> None:

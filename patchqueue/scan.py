@@ -1,9 +1,15 @@
-"""Scan pipeline: git -> discover -> parse -> import reports -> OSV -> KEV/EPSS/NVD."""
+"""Scan pipeline: git -> discover -> parse -> import reports -> OSV -> KEV/EPSS/NVD.
+
+Two entry points share one pipeline:
+  scan(target)    a folder, file, or git URL
+  scan_docker()   the containers running on this machine (via Trivy)
+"""
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
-from . import discovery, gitops, imports, inventory, model, parsers
+from . import discovery, dockerscan, gitops, imports, inventory, model, parsers
 from .sources import cache, epss, kev, nvd, osv
 
 
@@ -73,16 +79,47 @@ def scan(target: str, extra_reports=(), offline=False, pull=False, use_nvd=True,
 
     inv, inv_warn = inventory.load(base)
     warnings += inv_warn
+    reports = [(rp, _rel(base, rp)) for rp in disc.reports]
+    reports += [(Path(x).expanduser().resolve(), str(x)) for x in extra_reports]
+    log(f"found {len(disc.files)} files, {len(packages)} packages, {len(images)} images, "
+        f"{len(reports)} scanner reports")
+    return _assemble(str(root), label, packages, images, systems, warnings, inv, reports,
+                     offline, use_nvd, nvd_max, missing_report_hint="folder")
 
-    # Scanner reports (auto-discovered + --import)
+
+def docker_root_key() -> str:
+    return f"docker://{socket.gethostname()}"
+
+
+def scan_docker(offline=False, use_nvd=True, nvd_max=None, inv=None, log=None):
+    """Scan the images of containers running right now, via Trivy."""
+    log = log or (lambda _m: None)
+    containers, warnings = dockerscan.running_containers()
+    images = [{"image": c["image"], "service": c["name"], "system": c["name"], "file": "running container",
+               "published_ports": c["published"], "unresolved": False} for c in containers]
+    reports = []
+    if containers:
+        log(f"found {len(containers)} running containers")
+        paths, w = dockerscan.trivy_reports(sorted({c["image"] for c in containers}), offline=offline, log=log)
+        warnings += w
+        reports = [(p, f"trivy: {img}") for img, p in paths.items()]
+    systems = [{"name": c["name"], "file": "running container", "kind": "docker", "packages": 0,
+                "images": [c["image"]]} for c in containers]
+    return _assemble(docker_root_key(), "Running containers", [], images, systems, warnings,
+                     inv or {}, reports, offline, use_nvd, nvd_max, missing_report_hint="docker")
+
+
+def _assemble(root_key, label, packages, images, systems, warnings, inv, reports,
+              offline, use_nvd, nvd_max, missing_report_hint="folder"):
     image_keys = {}
     for im in images:
         full, repo = model.normalize_image(im["image"])
         image_keys.setdefault(full, set()).update({im["system"], full, repo})
+
     report_findings, covered = [], set()
-    for rp in list(disc.reports) + [Path(x).expanduser().resolve() for x in extra_reports]:
+    for rp, label_rp in reports:
         try:
-            rr = imports.load(rp, label=_rel(base, rp))
+            rr = imports.load(rp, label=label_rp)
         except (imports.ReportError, OSError) as e:
             warnings.append(str(e))
             continue
@@ -98,30 +135,29 @@ def scan(target: str, extra_reports=(), offline=False, pull=False, use_nvd=True,
                         if services:
                             loc["system"] = services[0]
         report_findings += rr.findings
-        systems.append({"name": rr.kind + " report", "file": _rel(base, rp), "kind": rr.kind,
-                        "packages": len({(f['package'], f['installed']) for f in rr.findings}),
-                        "images": sorted(rr.images)})
+        if missing_report_hint == "folder":
+            systems.append({"name": rr.kind + " report", "file": label_rp, "kind": rr.kind,
+                            "packages": len({(f['package'], f['installed']) for f in rr.findings}),
+                            "images": sorted(rr.images)})
 
-    need_report = []
-    for im in images:
-        full, _ = model.normalize_image(im["image"])
-        if full not in covered and not im.get("unresolved"):
-            need_report.append(im)
-    if need_report:
+    need_report = [im for im in images
+                   if model.normalize_image(im["image"])[0] not in covered and not im.get("unresolved")]
+    if need_report and missing_report_hint == "folder":
         cmds = "; ".join(f"`trivy image --format json -o trivy-{_safe(i['image'])}.json {i['image']}`"
                          for i in need_report[:5])
         warnings.append(f"{len(need_report)} image(s) found but NOT checked — PatchQ needs a Trivy/Grype "
                         f"report for image contents. Run {cmds}{' …' if len(need_report) > 5 else ''} "
-                        "in this folder; PatchQ picks up trivy*/grype*.json automatically.")
+                        "in this folder; PatchQ picks up trivy*/grype*.json automatically. "
+                        "Or run `patchq scan --docker` to scan running containers automatically.")
+    elif need_report:
+        warnings.append(f"{len(need_report)} running container image(s) were NOT checked: "
+                        + ", ".join(sorted({i['image'] for i in need_report})[:6]))
     for im in images:
         if im.get("published_ports"):
             exposed, _, _ = inventory.lookup(inv, [im["system"], *model.normalize_image(im["image"])])
             if not exposed and inventory.norm_key(im["system"]) not in inv:
-                warnings.append(f"service '{im['system']}' publishes ports — if it's reachable from the "
-                                "internet, add it to patchqueue.yml with `exposed: true` (moves its items up a tier)")
-
-    log(f"found {len(disc.files)} files, {len(packages)} packages, {len(images)} images, "
-        f"{len(disc.reports) + len(extra_reports)} scanner reports")
+                warnings.append(f"'{im['system']}' publishes ports — if it's reachable from the internet, add it "
+                                "to patchqueue.yml with `exposed: true` (moves its items up a tier)")
 
     results, osv_status = osv.lookup(packages, offline=offline)
     findings = []
@@ -166,7 +202,7 @@ def scan(target: str, extra_reports=(), offline=False, pull=False, use_nvd=True,
                            "no cache) — vulnerability matching did NOT run for them. Missing items here do NOT "
                            "mean you're clean. Re-run when online.")
     return {
-        "root": str(root), "label": label, "scanned_at": cache.now_iso(),
+        "root": root_key, "label": label, "scanned_at": cache.now_iso(),
         "systems": systems, "items": findings, "inventory": inv,
         "warnings": warnings, "sources": statuses, "packages": len(packages), "images": len(images),
     }
@@ -174,4 +210,3 @@ def scan(target: str, extra_reports=(), offline=False, pull=False, use_nvd=True,
 
 def _safe(img):
     return "".join(c if c.isalnum() or c in "-_." else "-" for c in img)[:60]
-
