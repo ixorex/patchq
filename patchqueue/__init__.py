@@ -1,6 +1,6 @@
 """PatchQ — one ranked patch queue for your homelab / dev stack."""
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 DISCLAIMER = (
     "PatchQ is a triage aid, not a guarantee. It ranks what it can see from public feeds. "

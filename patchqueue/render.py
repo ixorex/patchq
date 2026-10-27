@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 from . import DISCLAIMER, __version__
@@ -29,9 +30,13 @@ TIER_STYLE = {0: ("red", "bold"), 1: ("yellow", "bold"), 2: ("blue", "bold"), 3:
 BREAK_STYLE = {"major": ("red",), "minor": ("yellow",), "patch": ("green",), "unknown": ("dim",)}
 
 
+_INVISIBLE = re.compile("[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")  # bidi overrides, zero-width
+
+
 def _clean(s) -> str:
     """Strip control characters from feed / lockfile text before it hits the terminal."""
-    return "".join(ch for ch in str(s) if ch == "\n" or (ch >= " " and ch != "\x7f" and not "\x80" <= ch <= "\x9f"))
+    return _INVISIBLE.sub("", "".join(ch for ch in str(s)
+                                      if ch == "\n" or (ch >= " " and ch != "\x7f" and not "\x80" <= ch <= "\x9f")))
 
 
 def source_line(sources: dict) -> list:
@@ -90,7 +95,7 @@ def render_item(n, item, p) -> list:
     if item.get("status_note"):
         lines.append(f"     note   {p(_clean(item['status_note']), 'magenta')}")
     for k, cmd in enumerate((item.get("fix_cmd") or "").splitlines()):
-        lines.append(f"     {'fix ' if k == 0 else '    '}   {p(cmd, 'green')}")
+        lines.append(f"     {'fix ' if k == 0 else '    '}   {p(_clean(cmd), 'green')}")
     if item.get("fix_note"):
         lines.append(f"            {_clean(item['fix_note'])}")
     if item.get("summary"):
@@ -117,7 +122,7 @@ def _watch_line(n, item, p) -> str:
 def render_queue(ranked, scans, sources, warnings=(), color=False, show_all=False, title="queue") -> str:
     p = Painter(color)
     out = []
-    labels = ", ".join(f"{os.path.basename(s.get('label', '').rstrip('/')) or s.get('label')} "
+    labels = ", ".join(f"{_clean(os.path.basename(s.get('label', '').rstrip('/')) or s.get('label'))} "
                        f"(scanned {s.get('scanned_at', '')[:16].replace('T', ' ')})" for s in scans)
     out.append(p(f"PatchQ {__version__}", "bold") + f" — {title} for: {labels or 'nothing scanned yet'}")
     out += source_line(sources)
@@ -157,7 +162,7 @@ def render_queue(ranked, scans, sources, warnings=(), color=False, show_all=Fals
 
 def _header(p, scans, sources, warnings, title):
     out = []
-    labels = ", ".join(f"{os.path.basename(s.get('label', '').rstrip('/')) or s.get('label')} "
+    labels = ", ".join(f"{_clean(os.path.basename(s.get('label', '').rstrip('/')) or s.get('label'))} "
                        f"(scanned {s.get('scanned_at', '')[:16].replace('T', ' ')})" for s in scans)
     out.append(p(f"PatchQ {__version__}", "bold") + f" — {title} for: {labels or 'nothing scanned yet'}")
     out += source_line(sources)
@@ -221,7 +226,7 @@ def render_group(n, g, p, full=True):
         lines.append(("     fix    " if single else "       ") + head)
         pad = "            " if single else "         "
         for cmd in (t["fix_cmd"] or "").splitlines():
-            lines.append(pad + p(cmd, "green"))
+            lines.append(pad + p(_clean(cmd), "green"))
         if t.get("fix_note"):
             lines.append(pad + _clean(t["fix_note"]))
     if g["no_fix"]:

@@ -32,7 +32,7 @@ patchq init
 
 `patchq init` walks you through setup in about a minute:
 
-1. **Finds what to scan.** It looks in your home folder, `/opt` and `/srv` for compose files and lockfiles, and you pick which folders to include.
+1. **Finds what to scan.** It looks in your home folder, `/opt` and `/srv` for compose files and lockfiles, and you pick which to include. Your own folders and compose stacks are pre-selected; vendor software under `/opt` isn't.
 2. **Running containers.** If Docker or Podman is installed, it offers to scan the containers running right now (uses Trivy).
 3. **Automatic scans.** Daily, weekly or off, at a time you choose.
 4. **Dashboard.** It keeps the dashboard running in the background at http://127.0.0.1:8765.
@@ -89,7 +89,7 @@ Decisions are stored in `~/.patchqueue/queue.json` with their full history. Six 
 This is real output from `tests/fixtures/sample-homelab` (default grouped view; `--by-cve` lists each advisory). It ran offline against the test fixture feeds, so the EPSS/KEV numbers are illustrative.
 
 ```
-PatchQ 0.2.0 — scan for: homelab (scanned 2026-10-26 20:34)
+PatchQ 0.2.1 — scan for: homelab (scanned 2026-10-26 20:34)
 Data as of (UTC): OSV 2026-10-26 20:34 (cache) · KEV 2026-10-26 20:34 (cache) · EPSS 2026-10-26 20:34 (cache) · NVD —
 
 PATCH TODAY · 2 packages
@@ -147,15 +147,20 @@ The ranking uses tiers rather than a black-box score, so you can always tell why
 - **Missing CVSS shows as "CVSS pending".** It is never guessed. When an advisory publishes a CVSS v3 vector, PatchQ computes the score from that vector.
 - **Honest limitation:** scanners match package + version. They don't know whether your code actually calls the vulnerable function. Use `patchq ignore … --reason` when you know it doesn't.
 
-### `patchqueue.yml` (optional, in the scanned folder)
+### `patchqueue.yml`: mark what's internet-facing (optional)
 
 ```yaml
 systems:
-  proxy:            # compose service name, image name, or folder path
+  proxy:            # compose service name, container name, image name, or folder path
     exposed: true
     critical: true  # tie-breaker inside a tier
   web: {exposed: true}
+  dns: {exposed: false}   # LAN-only: also silences the "publishes ports" hint
 ```
+
+You can put it in two places:
+- **Next to a compose file or project** in a scanned folder. It applies to that folder.
+- **`~/.patchqueue/patchqueue.yml`**. It applies everywhere, including running containers scanned with `--docker`. Use this one if you only scan containers.
 
 ## What it reads
 
@@ -166,7 +171,7 @@ systems:
 | Docker / homelab | `docker-compose*.yml`, `compose*.yml`, `Dockerfile` FROM lines |
 | Scanner reports | Trivy JSON, Grype JSON, OSV-Scanner JSON (auto-picked up when named `*trivy*.json`, `*grype*.json`, `*osv-scanner*.json`, or via `--import`) |
 
-**Docker images:** PatchQ doesn't re-implement image scanning. For every image it finds without a report, it prints the exact `trivy image …` command to run. Drop the JSON next to your compose file and re-scan.
+**Docker images:** PatchQ doesn't re-implement image scanning. `patchq scan --docker` (or saying yes in `init`) runs Trivy on the containers that are running right now. For images that are in a compose file but not running, PatchQ prints the exact `trivy image …` command to run; drop the JSON next to your compose file and re-scan.
 
 **Unsupported files are reported, not skipped.** This covers `yarn.lock`, `pnpm-lock.yaml`, `uv.lock`, Go, Rust, Ruby, PHP and Maven files. Each comes with a workaround, usually osv-scanner JSON plus `--import`.
 
@@ -177,6 +182,7 @@ Lockfiles are parsed **locally**. No source code or files are uploaded, and noth
 - **OSV.dev**: package names, versions and ecosystem (public data)
 - **FIRST EPSS** and **NVD**: CVE IDs
 - **CISA KEV**: one download per day
+- **Trivy** (only with `--docker`): downloads its vulnerability database and may contact the image's registry. That's Trivy's own traffic.
 
 There is no telemetry or tracking, and no account is needed.
 
@@ -196,6 +202,19 @@ Security:
 - **Protected actions.** Every action needs a per-session form token and a same-origin request, so another website can't drive it.
 - **Locked-down page.** No JavaScript, strict security headers, and everything is HTML-escaped.
 - **Folders stay out of the browser.** Which folders get scanned can only be changed with `patchq init` in a terminal.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Dashboard at http://127.0.0.1:8765 won't load from another computer | It only listens on the machine running PatchQ. Keep `ssh -N -L 8765:127.0.0.1:8765 you@host` open in a terminal while you browse. On that machine, `patchq service status` should say the dashboard is `active`. |
+| Dashboard service not active | `journalctl --user -u patchq-serve -n 30` shows why. To run it once in the foreground: `patchq serve`. |
+| "That page was out of date" in the dashboard | The dashboard restarted. Reload the page and click again; nothing was changed. |
+| `--docker: no permission to talk to docker` | `sudo usermod -aG docker $USER`, then log out and back in. (Being in the docker group is effectively root.) |
+| "Trivy isn't installed" | `sudo apt install trivy` (Kali), or see trivy.dev. |
+| `NVD ⚠` / HTTP 503 in "Data as of" | NVD is often slow or down. PatchQ keeps going with cached data; CVSS shows "pending" until NVD answers. Set a free `NVD_API_KEY` for higher limits. |
+| "image(s) found but NOT checked" | That image is in a compose file but not running. Run the `trivy image …` command shown, or start the container and use `--docker`. |
+| Scheduled scans don't run while you're logged out | Run once: `sudo loginctl enable-linger $USER`. |
 
 ## Roadmap
 

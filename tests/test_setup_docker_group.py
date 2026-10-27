@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
-from patchqueue import cli, config, dockerscan, group, init, rank, runner, service, state
+from patchqueue import config, dockerscan, group, init, inventory, rank, service, state
 from patchqueue.model import new_finding
 from tests.helpers import SAMPLE, IsolatedTest, seed_cache
 from tests.test_cli_e2e import run
@@ -255,3 +255,109 @@ class InitTests(IsolatedTest):
         with mock.patch.object(service, "install", return_value=["ok"]):
             code, _, err = run("init", "--yes", "--time", "99:00", "--no-scan")
         self.assertEqual(code, 2)
+
+
+class RefinementTests(IsolatedTest):
+    """0.2.1: compose labels, global inventory, no false 'NOT checked', init cleanup, timer waits."""
+
+    def test_compose_labels_and_podman_ports(self):
+        rows = [{"Image": "pihole/pihole:latest", "Names": "stack-dns-1", "Ports": "0.0.0.0:53->53/tcp",
+                 "Labels": "com.docker.compose.project=stack,com.docker.compose.service=dns,other=x"},
+                {"Image": "jellyfin/jellyfin:10.9", "Names": ["jf"], "Ports": [{"host_port": 8096, "container_port": 8096}],
+                 "Labels": {"io.podman.compose.service": "media"}}]
+        out = "\n".join(json.dumps(r) for r in rows)
+        with mock.patch.object(dockerscan.shutil, "which", return_value="/usr/bin/docker"), \
+             mock.patch.object(dockerscan.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=out, stderr="")):
+            cs, _ = dockerscan.running_containers()
+        self.assertEqual([(c["service"], c["project"], c["published"]) for c in cs],
+                         [("dns", "stack", True), ("media", None, True)])
+
+    def test_global_inventory_marks_containers_exposed(self):
+        (self.home / "patchqueue.yml").write_text("systems:\n  dns: {exposed: true}\n")
+        inv, _ = inventory.load_global()
+        self.assertTrue(inv["dns"]["exposed"])
+        self.assertTrue(state.merged_inventory({"scans": {}})["dns"]["exposed"])
+
+    def test_docker_coverage_silences_compose_warning(self):
+        seed_cache()
+        sample = self.copy_sample()
+        from patchqueue import scan as scanmod
+        rec = scanmod.scan(str(sample), offline=True, use_nvd=False, covered_images=["nginx:1.25-alpine"])
+        self.assertFalse(any("NOT checked" in w and "nginx" in w for w in rec["warnings"]))
+        rec = scanmod.scan(str(sample), offline=True, use_nvd=False)
+        self.assertTrue(any("NOT checked" in w and "nginx" in w for w in rec["warnings"]))
+
+    def test_init_prunes_results_for_removed_folders_but_keeps_decisions(self):
+        with state.transaction() as data:
+            data["scans"] = {"/old": {"items": []}, "/keep": {"items": []}, "docker://h": {"items": []}}
+            state.set_decision(data, "CVE-1", "not_affected", reason="x")
+        with mock.patch("patchqueue.scan.docker_root_key", return_value="docker://h"), \
+             mock.patch.object(Path, "resolve", lambda self: self):
+            removed = init.prune_stale({**config.load(), "roots": ["/keep"], "docker": False})
+        self.assertEqual(sorted(removed), ["/old", "docker://h"])
+        data = state.load()
+        self.assertEqual(list(data["scans"]), ["/keep"])
+        self.assertIn("CVE-1", data["decisions"])
+
+    def test_init_offers_compose_file_in_home_without_scanning_all_of_home(self):
+        home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, home)
+        (home / "docker-compose.yml").write_text("services: {}")
+        (home / "notes.txt").write_text("hi")
+        with mock.patch.object(init.Path, "home", return_value=home):
+            found = dict(init.find_candidates([home]))
+        self.assertEqual(list(found), [home.resolve() / "docker-compose.yml"])
+
+    def test_import_needs_a_folder(self):
+        code, _, err = run("scan", "--docker", "--import", "x.json")
+        self.assertEqual(code, 2)
+        self.assertIn("--import needs a folder", err)
+
+    def test_quiet_prints_one_summary_line_and_timer_waits_for_lock(self):
+        seed_cache()
+        config.save({**config.load(), "roots": [str(self.copy_sample())]})
+        code, out, err = run("scan", "--offline", "--quiet")
+        self.assertEqual((code, out), (0, ""))
+        self.assertRegex(err, r"scan done — packages to patch: \d+ today")
+        import threading
+        import time as _t
+        done = []
+        with state.scan_lock():
+            th = threading.Thread(target=lambda: done.append(run("scan", "--offline", "--quiet", "--trigger", "timer")[0]))
+            th.start()
+            _t.sleep(0.3)
+            self.assertEqual(done, [])  # waiting, not skipped
+        th.join(10)
+        self.assertEqual(done, [0])
+
+
+class WizardInputTests(IsolatedTest):
+    def test_bad_answers_are_re_asked_not_swapped(self):
+        said = []
+        answers = iter(["hourly", "weekly"])
+        self.assertEqual(init._ask(lambda _p: next(answers), "How often?", "daily",
+                                   valid=lambda a: a in config.FREQS, say=said.append), "weekly")
+        self.assertTrue(any("isn't a valid answer" in s for s in said))
+        answers = iter(["weekly", "maybe", "n"])
+        self.assertIs(init._yes(lambda _p: next(answers), "Scan containers?", True, said.append), False)
+        self.assertEqual(sum("please answer y or n" in m for m in said), 2)
+
+    def test_yes_reasks(self):
+        answers = iter(["weekly", "n"])
+        self.assertIs(init._yes(lambda _p: next(answers), "q?", True, lambda _m: None), False)
+
+    def test_pick_parsing(self):
+        self.assertEqual(init._parse_pick("1,3", 4), [0, 2])
+        self.assertEqual(init._parse_pick("2-4", 4), [1, 2, 3])
+        self.assertEqual(init._parse_pick("all", 2), [0, 1])
+        self.assertEqual(init._parse_pick("none", 2), [])
+        for bad in ("5", "0", "a", "3-1", "1,,x"):
+            self.assertIsNone(init._parse_pick(bad, 4), bad)
+
+    def test_suggestions_skip_vendor_software_in_opt(self):
+        home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, home)
+        cands = [(Path("/opt/google-cloud-sdk"), {"requirements": 1}), (Path("/opt/stack"), {"compose": 1}),
+                 (home / "proj", {"npm-lock": 1})]
+        with mock.patch.object(init.Path, "home", return_value=home):
+            self.assertEqual(init._suggested(cands), [1, 2])

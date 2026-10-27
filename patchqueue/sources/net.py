@@ -16,6 +16,18 @@ class FetchError(Exception):
     pass
 
 
+class _HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only to https:// — never let a feed downgrade to http:// (or file:, ftp:)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not str(newurl).lower().startswith("https://"):
+            raise urllib.error.URLError(f"refused redirect to non-HTTPS URL {newurl!r}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_HttpsOnlyRedirects)
+
+
 def fetch(url: str, payload=None, headers=None, timeout: int = 30, retries: int = 2) -> bytes:
     if not url.startswith("https://"):
         raise FetchError(f"refusing non-HTTPS URL: {url}")
@@ -28,7 +40,8 @@ def fetch(url: str, payload=None, headers=None, timeout: int = 30, retries: int 
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, data=data, headers=h, method="POST" if data is not None else "GET")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            # https-only: checked above, and _HttpsOnlyRedirects refuses downgrades
+            with _OPENER.open(req, timeout=timeout) as r:  # nosec B310
                 body = r.read(MAX_BYTES + 1)
             if len(body) > MAX_BYTES:
                 raise FetchError(f"{url}: response larger than {MAX_BYTES} bytes")
@@ -48,5 +61,5 @@ def fetch_json(url: str, payload=None, headers=None, timeout: int = 30):
     body = fetch(url, payload=payload, headers=headers, timeout=timeout)
     try:
         return json.loads(body)
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:
         raise FetchError(f"{url.split('?')[0]}: invalid JSON ({e})")

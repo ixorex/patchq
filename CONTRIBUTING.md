@@ -8,7 +8,7 @@ PatchQ is maintained solo in a few hours a week. Contributions that keep it smal
 python3 -m unittest discover -s tests -t .
 ```
 
-Standard library only: no pytest, no network. Tested on Python 3.9, 3.10, 3.13 and 3.14. Network calls are blocked in tests (`tests/helpers.py`), and feed data comes from `tests/fixtures/feeds/`.
+Standard library only: no pytest, no network. CI runs it on Python 3.9 to 3.14 for every push. Network calls are blocked in tests (`tests/helpers.py`), and feed data comes from `tests/fixtures/feeds/`.
 
 ## How the feeds update
 
@@ -35,6 +35,7 @@ If a feed is down, the stale cache is used and the `Data as of` line says so. **
 - **Ranking stays auditable.** `rank.py` is pure. Any change needs a test that shows why item A beats item B.
 - **Never string-compare versions.** Use `version.compare(a, b, ecosystem)`.
 - **Untrusted input everywhere.** Lockfiles, reports and feed text are attacker-controllable. Shell-quote and validate anything that becomes a command, HTML-escape anything that reaches the dashboard, and strip control characters before printing to the terminal.
+- **Linear-time parsing.** Never put two optional whitespace runs next to each other in a regex (`\s*X?\s*`), and never let `\s` span newlines under `re.M`. Add a timing test to `tests/test_hardening.py` for new parsers.
 - **No new dependencies** without a one-sentence justification. No telemetry, ever.
 - If a feature needs more than ~2 hours/week of upkeep, it doesn't ship.
 

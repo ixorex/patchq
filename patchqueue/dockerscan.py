@@ -33,7 +33,7 @@ def _runtime():
 
 
 def running_containers():
-    """Return ([{name, image, published}], warnings)."""
+    """Return ([{name, image, published, service, project}], warnings)."""
     tool, path = _runtime()
     if not tool:
         return [], ["--docker: neither docker nor podman was found on this machine"]
@@ -64,11 +64,29 @@ def running_containers():
             warnings.append(f"--docker: skipped container {name!r}: unusual image reference")
             continue
         ports = row.get("Ports")
-        published = bool(ports) and "->" in str(ports)
-        out.append({"name": name or image, "image": image, "published": published})
+        if isinstance(ports, list):  # podman: list of port mappings
+            published = any(isinstance(p, dict) and p.get("host_port") for p in ports)
+        else:  # docker: "0.0.0.0:53->53/tcp, ..."
+            published = "->" in str(ports or "")
+        labels = _labels(row.get("Labels"))
+        out.append({"name": name or image, "image": image, "published": published,
+                    "service": labels.get("com.docker.compose.service") or labels.get("io.podman.compose.service"),
+                    "project": labels.get("com.docker.compose.project") or labels.get("io.podman.compose.project")})
     if not out:
         warnings.append(f"--docker: no running containers ({tool} ps returned nothing)")
     return out, warnings
+
+
+def _labels(raw) -> dict:
+    """docker gives "k=v,k2=v2"; podman gives a dict."""
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    out = {}
+    for part in str(raw or "").split(","):
+        k, sep, v = part.partition("=")
+        if sep:
+            out[k.strip()] = v.strip()
+    return out
 
 
 def report_path(image: str):

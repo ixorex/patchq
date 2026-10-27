@@ -43,22 +43,32 @@ def _prep(text: str):
     return lines
 
 
-_KEY = re.compile(
-    r"""^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)'|([^\s#'"\[\]{},][^#]*?))\s*:(?:\s+(.*))?$"""
-)
+_QKEY = re.compile(r"""^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)')[ \t]*:(?:[ \t]+(.*))?$""")
+_BAD_FIRST = set(" \t#'\"[]{},")
 
 
 def _split_key(t: str):
-    m = _KEY.match(t)
-    if not m:
+    """Split 'key: value'. Linear time (no backtracking regex on unquoted keys)."""
+    if t[:1] in ('"', "'"):
+        m = _QKEY.match(t)
+        if not m:
+            return None
+        key = m.group(1) if m.group(1) is not None else m.group(2).replace("''", "'")
+        return key, (m.group(3) or "").strip()
+    if not t or t[0] in _BAD_FIRST:
         return None
-    if m.group(1) is not None:
-        key = m.group(1)
-    elif m.group(2) is not None:
-        key = m.group(2).replace("''", "'")
-    else:
-        key = m.group(3).strip()
-    return key, (m.group(4) or "").strip()
+    i = 0
+    while True:
+        i = t.find(":", i)
+        if i < 0:
+            return None
+        if i + 1 == len(t) or t[i + 1] in " \t":
+            break
+        i += 1
+    key = t[:i].rstrip()
+    if not key or "#" in key:
+        return None
+    return key, t[i + 1:].strip()
 
 
 def _strip_props(s: str) -> str:

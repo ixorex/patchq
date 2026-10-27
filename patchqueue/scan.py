@@ -29,7 +29,8 @@ def _system_name(root: Path, file: Path) -> str:
     return root.name if rel_dir in ("", ".") else rel_dir
 
 
-def scan(target: str, extra_reports=(), offline=False, pull=False, use_nvd=True, nvd_max=None, log=None):
+def scan(target: str, extra_reports=(), offline=False, pull=False, use_nvd=True, nvd_max=None, log=None,
+         covered_images=()):
     """Scan one folder / file / git URL. Returns a scan record (plain dict)."""
     log = log or (lambda _m: None)
     warnings = []
@@ -59,7 +60,7 @@ def scan(target: str, extra_reports=(), offline=False, pull=False, use_nvd=True,
     packages, images, systems = [], [], []
     for f in disc.files:
         rel = _rel(base, f.path)
-        res = parsers.parse(f.path, f.kind)
+        res = parsers.parse(f.path, f.kind, root=base)
         system = _system_name(base, f.path)
         rel_dir = _rel(base, f.path.parent)
         for p in res.packages:
@@ -77,14 +78,16 @@ def scan(target: str, extra_reports=(), offline=False, pull=False, use_nvd=True,
     for p, reason in disc.unsupported:
         warnings.append(f"{_rel(base, p)}: {reason}")
 
-    inv, inv_warn = inventory.load(base)
-    warnings += inv_warn
+    ginv, gwarn = inventory.load_global()
+    finv, inv_warn = inventory.load(base)
+    inv = {**ginv, **finv}  # the folder's own patchqueue.yml wins
+    warnings += gwarn + inv_warn
     reports = [(rp, _rel(base, rp)) for rp in disc.reports]
     reports += [(Path(x).expanduser().resolve(), str(x)) for x in extra_reports]
-    log(f"found {len(disc.files)} files, {len(packages)} packages, {len(images)} images, "
+    log(f"{label}: {len(disc.files)} files, {len(packages)} packages, {len(images)} images, "
         f"{len(reports)} scanner reports")
     return _assemble(str(root), label, packages, images, systems, warnings, inv, reports,
-                     offline, use_nvd, nvd_max, missing_report_hint="folder")
+                     offline, use_nvd, nvd_max, missing_report_hint="folder", covered_images=covered_images)
 
 
 def docker_root_key() -> str:
@@ -95,28 +98,33 @@ def scan_docker(offline=False, use_nvd=True, nvd_max=None, inv=None, log=None):
     """Scan the images of containers running right now, via Trivy."""
     log = log or (lambda _m: None)
     containers, warnings = dockerscan.running_containers()
-    images = [{"image": c["image"], "service": c["name"], "system": c["name"], "file": "running container",
+    images = [{"image": c["image"], "service": c.get("service") or c["name"],
+               "system": c.get("service") or c["name"], "file": "running container",
+               "aliases": [k for k in (c["name"], c.get("project")) if k],
                "published_ports": c["published"], "unresolved": False} for c in containers]
     reports = []
     if containers:
-        log(f"found {len(containers)} running containers")
+        log(f"running containers: {len(containers)} found")
         paths, w = dockerscan.trivy_reports(sorted({c["image"] for c in containers}), offline=offline, log=log)
         warnings += w
         reports = [(p, f"trivy: {img}") for img, p in paths.items()]
     systems = [{"name": c["name"], "file": "running container", "kind": "docker", "packages": 0,
                 "images": [c["image"]]} for c in containers]
+    ginv, gwarn = inventory.load_global()
+    warnings += gwarn
     return _assemble(docker_root_key(), "Running containers", [], images, systems, warnings,
-                     inv or {}, reports, offline, use_nvd, nvd_max, missing_report_hint="docker")
+                     {**ginv, **(inv or {})}, reports, offline, use_nvd, nvd_max, missing_report_hint="docker")
 
 
 def _assemble(root_key, label, packages, images, systems, warnings, inv, reports,
-              offline, use_nvd, nvd_max, missing_report_hint="folder"):
-    image_keys = {}
+              offline, use_nvd, nvd_max, missing_report_hint="folder", covered_images=()):
+    image_keys, image_system = {}, {}
     for im in images:
         full, repo = model.normalize_image(im["image"])
-        image_keys.setdefault(full, set()).update({im["system"], full, repo})
+        image_keys.setdefault(full, set()).update({im["system"], full, repo, *im.get("aliases", [])})
+        image_system.setdefault(full, set()).add(im["system"])
 
-    report_findings, covered = [], set()
+    report_findings, covered = [], {model.normalize_image(i)[0] for i in covered_images}
     for rp, label_rp in reports:
         try:
             rr = imports.load(rp, label=label_rp)
@@ -131,9 +139,7 @@ def _assemble(root_key, label, packages, images, systems, warnings, inv, reports
                     extra = image_keys.get(full)
                     if extra:
                         fnd["match_keys"] = sorted(set(fnd["match_keys"]) | extra)
-                        services = sorted(extra - {full, repo})
-                        if services:
-                            loc["system"] = services[0]
+                        loc["system"] = ", ".join(sorted(image_system[full]))
         report_findings += rr.findings
         if missing_report_hint == "folder":
             systems.append({"name": rr.kind + " report", "file": label_rp, "kind": rr.kind,
@@ -154,10 +160,13 @@ def _assemble(root_key, label, packages, images, systems, warnings, inv, reports
                         + ", ".join(sorted({i['image'] for i in need_report})[:6]))
     for im in images:
         if im.get("published_ports"):
-            exposed, _, _ = inventory.lookup(inv, [im["system"], *model.normalize_image(im["image"])])
-            if not exposed and inventory.norm_key(im["system"]) not in inv:
-                warnings.append(f"'{im['system']}' publishes ports — if it's reachable from the internet, add it "
-                                "to patchqueue.yml with `exposed: true` (moves its items up a tier)")
+            keys = [im["system"], *im.get("aliases", []), *model.normalize_image(im["image"])]
+            exposed, _, matched = inventory.lookup(inv, keys)
+            if not exposed and not matched:
+                where = "~/.patchqueue/patchqueue.yml" if missing_report_hint == "docker" else "patchqueue.yml"
+                warnings.append(f"'{im['system']}' publishes ports — add it to {where} with `exposed: true` if it's "
+                                "reachable from the internet (moves its items up a tier), or `exposed: false` to "
+                                "silence this")
 
     results, osv_status = osv.lookup(packages, offline=offline)
     findings = []

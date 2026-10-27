@@ -55,11 +55,14 @@ def cmd_scan(args):
                 return 1
         else:
             targets = ["."]
+    if args.imports and not targets:
+        _err("--import needs a folder to attach the report to, e.g. `patchq scan . --import report.json`")
+        return 2
     log = (lambda m: None) if args.quiet and not sys.stderr.isatty() else (lambda m: print(f"patchq: {m}", file=sys.stderr))
     try:
         _, errors = runner.run(targets, docker=docker, extra_reports=args.imports, offline=args.offline,
                                pull=args.pull, use_nvd=not args.no_nvd, nvd_max=args.nvd_max, log=log,
-                               trigger=args.trigger)
+                               trigger=args.trigger, wait=args.trigger == "timer")
     except state.Busy:
         _err("another scan is already running — try again in a minute")
         return 3
@@ -68,6 +71,10 @@ def cmd_scan(args):
     if errors and len(errors) == len(targets) and not docker:
         return 2
     if args.quiet:
+        groups, _ = group.group(_ranked(state.load()))  # one line for the journal / cron mail
+        n = [sum(1 for g in groups if g["tier"] == t) for t in range(4)]
+        print(f"patchq: scan done — packages to patch: {n[0]} today, {n[1]} this week, {n[2]} this sprint; "
+              f"{n[3]} watching", file=sys.stderr)
         return 0
     return _show(state.load(), args, title="scan")
 

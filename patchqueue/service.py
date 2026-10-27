@@ -47,12 +47,23 @@ def _q(arg: str) -> str:
 
 
 def _exec(*args) -> str:
+    if any(c in sys.executable for c in "\n\r\x00"):
+        raise ServiceError("python path contains a newline — refusing to write a unit file")
     return " ".join(_q(a) for a in [sys.executable, "-m", "patchqueue", *args])
+
+
+class ServiceError(ValueError):
+    pass
 
 
 def _env_lines() -> str:
     home = os.environ.get("PATCHQ_HOME")
-    return f"Environment={_q('PATCHQ_HOME=' + home)}\n" if home else ""
+    if not home:
+        return ""
+    if any(c in home for c in "\n\r\x00"):
+        raise ServiceError("PATCHQ_HOME contains a newline — refusing to write a unit file")
+    val = ("PATCHQ_HOME=" + home).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    return f'Environment="{val}"\n'
 
 
 def on_calendar(s: dict) -> str:

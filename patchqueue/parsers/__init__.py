@@ -16,9 +16,14 @@ PARSERS = {
 }
 
 
-def parse(path, kind) -> ParseResult:
-    """Never raises for a bad file: the failure becomes a visible warning."""
+def parse(path, kind, root=None) -> ParseResult:
+    """Never raises for a bad file: the failure becomes a visible warning.
+
+    root: the scanned folder; parsers that follow includes stay inside it.
+    """
     try:
+        if kind == "requirements":
+            return python.parse_requirements(path, root=root)
         return PARSERS[kind](path)
     except Exception as e:  # noqa: BLE001
         return ParseResult(warnings=[f"could not parse ({type(e).__name__}: {e}) — this file was NOT checked"])

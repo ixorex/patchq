@@ -138,7 +138,7 @@ def sniff_report(path: Path):
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None, None
     if isinstance(data, dict):
         if "SchemaVersion" in data and ("Results" in data or "ArtifactName" in data):

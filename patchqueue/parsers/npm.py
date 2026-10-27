@@ -13,7 +13,7 @@ _REGISTRY_VER = re.compile(r"^\d+\.\d+\.\d+")
 def _manifest_direct(dirpath):
     try:
         data = json.loads(read_text(dirpath / "package.json"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     names = set()
     for sec in _DEP_SECTIONS:
@@ -82,7 +82,7 @@ def parse_lock(path) -> ParseResult:
     return res
 
 
-_RANGE = re.compile(r"^\s*(\^|~|>=|=|v)?\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\s*$")
+_RANGE = re.compile(r"^(\^|~|>=|=|v)?[ \t]*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$")
 
 
 def parse_manifest(path) -> ParseResult:
@@ -97,7 +97,7 @@ def parse_manifest(path) -> ParseResult:
         if not isinstance(deps, dict):
             continue
         for name, spec in deps.items():
-            m = _RANGE.match(str(spec))
+            m = _RANGE.match(str(spec).strip()[:200])
             if not m:
                 skipped.append(f"{name}@{spec}")
                 continue

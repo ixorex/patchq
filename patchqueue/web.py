@@ -373,7 +373,7 @@ def page_settings(data, token, job, msg=None, err=False):
            f"<dl class='kv'><dt>Dashboard service</dt><dd>{e(st['dashboard'])}</dd>"
            f"<dt>Scan timer</dt><dd>{e(st['timer'])}</dd><dt>Next scan</dt><dd>{e(st['next'] or '—')}</dd></dl>")
     body = (_flash(job, msg, err)
-            + "<div class='panel'><h3>Automatic scans</h3>"
+            + "<div class='panel'><h3>Automatic scans</h3>"  # nosec B608
             f"<form method='post' action='/schedule' class='acts'>{_hidden(token)}"
             f"<select name='freq'>{freq_opts}</select>"
             f"<input type='time' name='time' value='{e(s['time'])}' required>"
@@ -483,7 +483,10 @@ def make_handler(port, token, job):
                 return self._send(413, "request too large", "text/plain; charset=utf-8")
             form = dict(urllib.parse.parse_qsl(self.rfile.read(length).decode("utf-8", "replace")))
             if not hmac.compare_digest(form.get("token", ""), token):
-                return self._send(403, "stale or missing form token — reload the page", "text/plain; charset=utf-8")
+                if origin in origins or site == "same-origin":  # our own page, just from before a restart
+                    return self._redirect("/", "That page was out of date (the dashboard restarted). "
+                                               "Nothing was changed — please try again.", err=True)
+                return self._send(403, "missing or invalid form token", "text/plain; charset=utf-8")
             path = self.path.partition("?")[0]
             if path == "/scan":
                 return self._scan()

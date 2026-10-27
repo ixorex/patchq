@@ -35,8 +35,16 @@ def find_candidates(bases=None, max_depth=4):
                 k = discovery.classify(here / fn)
                 if k and k not in ("npm-manifest", "dockerfile"):
                     kinds[k] = kinds.get(k, 0) + 1
-            if not kinds or here == base:
-                if kinds and here == base and base != Path.home().resolve():
+            if not kinds:
+                continue
+            if here == base:
+                if base == Path.home().resolve():
+                    # don't propose scanning all of ~ — propose the individual files instead
+                    for fn in filenames:
+                        k = discovery.classify(here / fn)
+                        if k and k not in ("npm-manifest", "dockerfile"):
+                            found[here / fn] = {k: 1}
+                else:
                     found.setdefault(here, {}).update(kinds)
                 continue
             rel = here.relative_to(base)
@@ -55,15 +63,60 @@ def _describe(kinds):
     return ", ".join(f"{v} {_KIND_LABEL.get(k, k)}" for k, v in sorted(kinds.items()))
 
 
-def _ask(ask, prompt, default):
-    ans = ask(f"{prompt} [{default}]: ").strip()
-    return ans or default
+TRIES = 3
 
 
-def _yes(ask, prompt, default=True):
+def _ask(ask, prompt, default, valid=None, say=print, normalize=lambda a: a):
+    """Ask until the answer is valid (or Enter for the default). Never silently swaps a bad answer."""
+    for _ in range(TRIES):
+        ans = normalize(ask(f"{prompt} [{default}]: ").strip()) or default
+        if valid is None or valid(ans):
+            return ans
+        say(f"   '{ans}' isn't a valid answer — try again")
+    say(f"   using the default: {default}")
+    return default
+
+
+def _yes(ask, prompt, default=True, say=print):
     d = "Y/n" if default else "y/N"
-    ans = ask(f"{prompt} [{d}]: ").strip().lower()
-    return default if not ans else ans in ("y", "yes")
+    for _ in range(TRIES):
+        ans = ask(f"{prompt} [{d}]: ").strip().lower()
+        if not ans:
+            return default
+        if ans in ("y", "yes", "n", "no"):
+            return ans in ("y", "yes")
+        say("   please answer y or n")
+    return default
+
+
+def _parse_pick(pick, n):
+    """'all' | 'none' | '1,3' | '2-4' -> sorted indexes, or None if invalid."""
+    pick = pick.strip().lower()
+    if pick == "all":
+        return list(range(n))
+    if pick == "none":
+        return []
+    out = set()
+    for part in pick.replace(" ", "").split(","):
+        a, sep, b = part.partition("-")
+        if not a.isdigit() or (sep and not b.isdigit()):
+            return None
+        lo, hi = int(a), int(b) if sep else int(a)
+        if not 1 <= lo <= hi <= n:
+            return None
+        out.update(range(lo - 1, hi))
+    return sorted(out)
+
+
+def _suggested(cands):
+    """Pre-select things that are clearly yours: under your home folder, or compose stacks.
+    Lockfiles under /opt are usually installed vendor software, not your projects."""
+    home = Path.home().resolve()
+    picks = []
+    for i, (root, kinds) in enumerate(cands):
+        if "compose" in kinds or root == home or home in root.parents:
+            picks.append(i)
+    return picks
 
 
 def wizard(ask=input, say=print, bases=None):
@@ -75,32 +128,33 @@ def wizard(ask=input, say=print, bases=None):
     cands = find_candidates(bases)
     roots = []
     if cands:
+        suggested = _suggested(cands)
         for i, (root, kinds) in enumerate(cands, 1):
-            say(f"   {i}. {root}   ({_describe(kinds)})")
-        pick = _ask(ask, "   Scan which? 'all', numbers like 1,3, or 'none'", "all").lower()
-        if pick == "all":
-            roots = [str(r) for r, _ in cands]
-        elif pick != "none":
-            for part in pick.replace(" ", "").split(","):
-                if part.isdigit() and 1 <= int(part) <= len(cands):
-                    roots.append(str(cands[int(part) - 1][0]))
+            mark = "*" if i - 1 in suggested else " "
+            say(f"  {mark}{i}. {root}   ({_describe(kinds)})")
+        say("   (* = suggested: your home folder and compose stacks)")
+        default = ",".join(str(i + 1) for i in suggested) or "none"
+        pick = _ask(ask, "   Scan which? numbers like 1,3 or 2-4, 'all', or 'none'", default,
+                    valid=lambda a: _parse_pick(a, len(cands)) is not None, say=say)
+        roots = [str(cands[i][0]) for i in _parse_pick(pick, len(cands))]
     else:
         say("   nothing found automatically.")
     while True:
-        extra = ask("   Add another folder (path, or Enter to continue): ").strip()
+        extra = ask("   Add another folder or file (path, or Enter to continue): ").strip()
         if not extra:
             break
         p = Path(extra).expanduser().resolve()
-        if p.is_dir():
+        if p.exists():
             roots.append(str(p))
+            say(f"   added {p}")
         else:
-            say(f"   {p} isn't a folder — skipped")
+            say(f"   {p} doesn't exist — skipped")
     cfg["roots"] = sorted(set(roots))
 
     say("\n2/4  Running containers")
     tool, _ = dockerscan._runtime()
     if tool:
-        cfg["docker"] = _yes(ask, f"   {tool} found. Scan the containers running on this machine too?", True)
+        cfg["docker"] = _yes(ask, f"   {tool} found. Scan the containers running on this machine too?", True, say)
         if cfg["docker"] and not shutil.which("trivy"):
             say("   note: " + dockerscan.TRIVY_HELP)
     else:
@@ -108,29 +162,48 @@ def wizard(ask=input, say=print, bases=None):
         cfg["docker"] = False
 
     say("\n3/4  Automatic scans")
-    freq = _ask(ask, "   How often? daily / weekly / off", "daily").lower()
-    cfg["schedule"]["freq"] = freq if freq in config.FREQS else "daily"
-    if cfg["schedule"]["freq"] != "off":
-        cfg["schedule"]["time"] = _ask(ask, "   What time? (24h HH:MM)", cfg["schedule"]["time"])
-        if cfg["schedule"]["freq"] == "weekly":
-            day = _ask(ask, "   Which day? Mon-Sun", cfg["schedule"]["weekday"]).capitalize()[:3]
-            cfg["schedule"]["weekday"] = day if day in config.WEEKDAYS else "Mon"
-    try:
-        config.validate_schedule(cfg["schedule"])
-    except config.ConfigError as e:
-        say(f"   {e} — using 06:30")
-        cfg["schedule"]["time"] = "06:30"
+    s = cfg["schedule"]
+    s["freq"] = _ask(ask, "   How often? daily / weekly / off", "daily", valid=lambda a: a in config.FREQS,
+                     say=say, normalize=str.lower)
+    if s["freq"] != "off":
+        s["time"] = _ask(ask, "   What time? (24h HH:MM)", s["time"], say=say,
+                         valid=lambda a: bool(config._TIME.match(a)))
+        if s["freq"] == "weekly":
+            s["weekday"] = _ask(ask, "   Which day? Mon Tue Wed Thu Fri Sat Sun", s["weekday"], say=say,
+                                normalize=lambda a: a[:3].capitalize(), valid=lambda a: a in config.WEEKDAYS)
 
     say("\n4/4  Dashboard")
     dash = True
     if service.available():
-        dash = _yes(ask, "   Keep the dashboard running in the background (localhost only)?", True)
+        dash = _yes(ask, "   Keep the dashboard running in the background (localhost only)?", True, say)
+    else:
+        say("   background services aren't available on this machine (no systemd user session) — "
+            "run `patchq serve` when you want the dashboard.")
+    if not cfg["roots"] and not cfg["docker"]:
+        say("\n   note: nothing selected to scan — re-run `patchq init` or use `patchq scan <folder>`.")
     config.save(cfg)
-    return finish(cfg, dash, say, run_scan=_yes(ask, "\nRun the first scan now?", True))
+    return finish(cfg, dash, say, run_scan=bool(cfg["roots"] or cfg["docker"])
+                  and _yes(ask, "\nRun the first scan now?", True, say))
+
+
+def prune_stale(cfg):
+    """Drop stored results for folders / container scans that are no longer configured.
+    Decisions (patched / deferred / not affected) are kept."""
+    from . import scan as _scan, state
+    keep = {str(Path(r).expanduser().resolve()) for r in cfg["roots"]}
+    if cfg["docker"]:
+        keep.add(_scan.docker_root_key())
+    with state.transaction() as data:
+        stale = [k for k in data["scans"] if k not in keep]
+        for k in stale:
+            del data["scans"][k]
+    return stale
 
 
 def finish(cfg, dashboard, say=print, run_scan=True):
     say(f"\nSaved {config.path()}")
+    for k in prune_stale(cfg):
+        say(f"   removed old results for {k} (no longer in your setup; decisions kept)")
     say(f"   folders: {', '.join(cfg['roots']) or '(none)'}")
     say(f"   running containers: {'yes' if cfg['docker'] else 'no'}")
     for m in service.install(cfg, dashboard=dashboard):

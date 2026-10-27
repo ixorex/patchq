@@ -14,6 +14,9 @@ import re
 __all__ = ["compare", "bump_kind", "normalize_ecosystem", "InvalidVersion"]
 
 
+MAX_LEN = 128  # no real version is longer; caps regex work on hostile input
+
+
 class InvalidVersion(ValueError):
     pass
 
@@ -43,8 +46,8 @@ def normalize_ecosystem(eco: str) -> str:
 
 # ---------------------------------------------------------------- SemVer (npm)
 _SEMVER = re.compile(
-    r"^\s*[vV=]*\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?"
-    r"(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?\s*$"
+    r"^[vV=]*[ \t]*(\d+)(?:\.(\d+))?(?:\.(\d+))?"
+    r"(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
 )
 
 
@@ -67,14 +70,14 @@ def _semver_key(v: str):
 
 # ---------------------------------------------------------------- PEP 440 (PyPI)
 _PEP440 = re.compile(
-    r"""^\s*v?
+    r"""^v?
     (?:(?P<epoch>\d+)!)?
     (?P<release>\d+(?:\.\d+)*)
     (?P<pre>[-_.]?(?P<pre_l>alpha|beta|preview|pre|rc|a|b|c)[-_.]?(?P<pre_n>\d+)?)?
     (?P<post>(?:-(?P<post_n1>\d+))|(?:[-_.]?(?P<post_l>post|rev|r)[-_.]?(?P<post_n2>\d+)?))?
     (?P<dev>[-_.]?(?P<dev_l>dev)[-_.]?(?P<dev_n>\d+)?)?
     (?:\+(?P<local>[a-z0-9]+(?:[-_.][a-z0-9]+)*))?
-    \s*$""",
+    $""",
     re.VERBOSE | re.IGNORECASE,
 )
 _PRE_ORDER = {"a": 0, "alpha": 0, "b": 1, "beta": 1, "c": 2, "rc": 2, "pre": 2, "preview": 2}
@@ -183,7 +186,7 @@ def _deb_compare(a: str, b: str) -> int:
 
 # ---------------------------------------------------------------- apk (Alpine)
 _APK = re.compile(
-    r"^\s*(\d+(?:\.\d+)*)([a-z])?((?:_(?:alpha|beta|pre|rc|cvs|svn|git|hg|p)\d*)*)(?:-r(\d+))?\s*$"
+    r"^(\d+(?:\.\d+)*)([a-z])?((?:_(?:alpha|beta|pre|rc|cvs|svn|git|hg|p)\d*)*)(?:-r(\d+))?$"
 )
 _APK_SUFFIX = {"alpha": -4, "beta": -3, "pre": -2, "rc": -1, "cvs": 1, "svn": 2, "git": 3, "hg": 4, "p": 5}
 
@@ -230,9 +233,12 @@ _KEYS = {
 
 def compare(a: str, b: str, ecosystem: str = "") -> int:
     """Return -1, 0 or 1. Never compares versions as plain strings."""
-    a, b = str(a), str(b)
+    a, b = str(a).strip(), str(b).strip()
     if a == b:
         return 0
+    if len(a) > MAX_LEN or len(b) > MAX_LEN:  # absurd input: linear fallback only
+        ka, kb = _generic_key(a[:MAX_LEN]), _generic_key(b[:MAX_LEN])
+        return (ka > kb) - (ka < kb)
     eco = normalize_ecosystem(ecosystem)
     if eco in ("Debian", "Ubuntu"):
         return _deb_compare(a, b)
@@ -252,7 +258,7 @@ _LEADING = re.compile(r"^\s*[vV=]*(?:\d+[!:])?(\d+(?:\.\d+)*)")
 
 
 def _release_nums(v: str):
-    m = _LEADING.match(v or "")
+    m = _LEADING.match((v or "")[:MAX_LEN])
     if not m:
         return None
     nums = [int(x) for x in m.group(1).split(".")]

@@ -33,7 +33,7 @@ def load() -> dict:
     try:
         with open(p, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:
         # Never overwrite a file we can't read: it holds the user's decisions.
         raise StateError(f"{p} is unreadable ({e}). Fix or move it; PatchQ won't overwrite it.")
     data.setdefault("scans", {})
@@ -129,7 +129,8 @@ def merged_items(data):
 
 
 def merged_inventory(data):
-    inv = {}
+    from . import inventory
+    inv = dict(inventory.load_global()[0])  # edits to the global file apply without a rescan
     for rec in data["scans"].values():
         inv.update(rec.get("inventory") or {})
     return inv

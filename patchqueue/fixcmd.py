@@ -36,9 +36,21 @@ def _q(s: str) -> str:
     return shlex.quote(s)
 
 
-def _cd(directory) -> str:
+_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
+
+
+def unsafe_text(s) -> bool:
+    """Control chars or invisible / bidi-override chars that could make a printed
+    command look different from what actually gets pasted and run."""
+    return bool(_UNSAFE.search(str(s or "")))
+
+
+def _cd(directory):
+    """`cd <dir> && ` prefix, '' for no dir, None when the path isn't safe to print."""
     if not directory:
         return ""
+    if unsafe_text(directory):
+        return None
     home = os.path.expanduser("~")
     if directory == home:
         return "cd ~ && "
@@ -86,6 +98,9 @@ def _command_for(item, loc) -> tuple:
         return "", f"not generating a command: package name {name!r} has unexpected characters — inspect {loc.get('file')}"
 
     cd = _cd(loc.get("dir"))
+    if cd is None:
+        return "", ("not generating a command: the folder path contains control or invisible characters "
+                    f"— inspect {loc.get('file')!r} by hand")
     kind = loc.get("kind", "")
     image = loc.get("image")
     in_image = f" (inside image {image})" if image else ""

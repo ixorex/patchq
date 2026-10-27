@@ -1,6 +1,5 @@
 import http.client
 import json
-import re
 import threading
 import time
 import urllib.parse
@@ -100,8 +99,12 @@ class DashboardTests(IsolatedTest):
     def test_csrf_protections(self):
         # no token
         self.assertEqual(self.req("POST", "/decide", {"id": "CVE-2026-0002", "action": "done"})[0], 403)
-        # wrong token
-        self.assertEqual(self.post("/decide", id="CVE-2026-0002", action="done", token="nope")[0], 403)
+        # wrong token from our own (stale) page: friendly redirect, nothing changed
+        status, h, _ = self.post("/decide", id="CVE-2026-0002", action="done", token="nope")
+        self.assertEqual(status, 303)
+        self.assertIn("err=1", h["Location"])
+        # wrong token with no browser origin headers at all: hard refusal
+        self.assertEqual(self.req("POST", "/decide", {"id": "CVE-2026-0002", "action": "done", "token": "nope"})[0], 403)
         # cross-origin with a valid-looking token
         s = self.req("POST", "/decide", {"id": "CVE-2026-0002", "action": "done", "token": self.token},
                      headers={"Origin": "https://evil.example"})[0]

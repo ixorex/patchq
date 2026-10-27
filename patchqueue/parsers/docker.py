@@ -11,7 +11,7 @@ import re
 from .. import miniyaml
 from .base import ParseResult, read_text
 
-_IMAGE_LINE = re.compile(r"""^\s*-?\s*image:\s*["']?([^"'\s#]+)""", re.M)
+_IMAGE_LINE = re.compile(r"""^[ \t]*(?:-[ \t]*)?image:[ \t]*["']?([^"'\s#]+)""", re.M)
 
 
 def parse_compose(path) -> ParseResult:
@@ -48,7 +48,7 @@ def parse_compose(path) -> ParseResult:
     return res
 
 
-_FROM = re.compile(r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", re.I | re.M)
+_FROM = re.compile(r"^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)(?:[ \t]+AS[ \t]+(\S+))?", re.I | re.M)
 
 
 def parse_dockerfile(path) -> ParseResult:

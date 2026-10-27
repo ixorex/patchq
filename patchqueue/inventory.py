@@ -78,3 +78,16 @@ def lookup(inventory: dict, keys):
             exposed = exposed or e.get("exposed", False)
             critical = critical or e.get("critical", False)
     return exposed, critical, matched
+
+
+def global_path():
+    from .sources import cache
+    return cache.home() / "patchqueue.yml"
+
+
+def load_global():
+    """~/.patchqueue/patchqueue.yml — applies to every scan, including running containers."""
+    p = global_path()
+    if not p.is_file():
+        return {}, []
+    return load(p.parent)

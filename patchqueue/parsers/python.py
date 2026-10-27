@@ -8,7 +8,7 @@ from pathlib import Path
 from .base import ParseResult, read_text
 
 _REQ = re.compile(
-    r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(\[[^\]]*\])?\s*(===|==)\s*([A-Za-z0-9][A-Za-z0-9.!+_*-]*)\s*$"
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)[ \t]*(\[[^\]]*\][ \t]*)?(===|==)[ \t]*([A-Za-z0-9][A-Za-z0-9.!+_*-]*)$"
 )
 
 
@@ -31,13 +31,16 @@ def _logical_lines(text):
         yield buf
 
 
-def parse_requirements(path, _seen=None) -> ParseResult:
+def parse_requirements(path, _seen=None, root=None) -> ParseResult:
     res = ParseResult()
     _seen = _seen if _seen is not None else set()
     real = Path(path).resolve()
     if real in _seen:
         return res
     _seen.add(real)
+    # `-r` includes may only point inside the scanned folder: a hostile repo must not be able
+    # to make PatchQ read (and send "name==version" lines from) files elsewhere on the machine.
+    root = Path(root).resolve() if root else real.parent
     unpinned, skipped = [], []
     for line in _logical_lines(read_text(path)):
         line = re.sub(r"(^|\s)#.*$", "", line).strip()
@@ -50,10 +53,15 @@ def parse_requirements(path, _seen=None) -> ParseResult:
                 res.warnings.append(f"constraints file {target} not scanned (pins there only apply if installed)")
                 continue
             inc = (Path(path).parent / target)
+            try:
+                inc.resolve().relative_to(root)
+            except (ValueError, OSError):
+                res.warnings.append(f"included file {target} is outside the scanned folder — not read")
+                continue
             if is_requirements_name(inc):
                 continue  # auto-discovery scans it on its own
             if inc.is_file():
-                sub = parse_requirements(inc, _seen)
+                sub = parse_requirements(inc, _seen, root)
                 for p in sub.packages:
                     p.setdefault("file_abs", str(inc))
                 res.packages += sub.packages
