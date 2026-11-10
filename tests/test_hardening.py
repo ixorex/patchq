@@ -1,5 +1,6 @@
 """Hostile-input hardening: everything a scanned repo or report controls must not hang,
 crash, read outside the scan root, or reach the terminal / browser unescaped."""
+import json
 import os
 import shutil
 import tempfile
@@ -7,14 +8,15 @@ import threading
 import time
 import unittest
 import unittest.mock
+from types import SimpleNamespace
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from patchqueue import fixcmd, miniyaml, parsers, rank, render, scan, service, state, version, web
+from patchqueue import cli, discovery, fixcmd, imports, miniyaml, parsers, rank, render, scan, service, state, version, web
 from patchqueue.model import new_finding
 from patchqueue.parsers import docker as dk, npm as npmp, python as pyp
-from patchqueue.sources import net
+from patchqueue.sources import net, nvd, osv
 from tests.helpers import IsolatedTest
 
 BIG = 200_000
@@ -93,6 +95,153 @@ class HostileInputTests(IsolatedTest):
         out += render.render_queue(ranked, [], {}, show_all=True)
         for ch in ("\x1b", "\x07", "‮", "⁦"):
             self.assertNotIn(ch, out)
+
+
+class WrongTypeTests(IsolatedTest):
+    """Wrong-typed fields in scanner reports / feeds / queue.json must warn, not crash."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def test_wrong_typed_trivy_report_warns_not_crash(self):
+        data = {"SchemaVersion": 2, "ArtifactName": "img", "Results": [
+            "not-an-object",
+            {"Type": "npm", "Target": "x", "Vulnerabilities": [
+                {"VulnerabilityID": "CVE-2026-0001", "PkgName": "lodash", "InstalledVersion": "4.17.15",
+                 "CVSS": ["not-a-dict"]},
+                {"VulnerabilityID": "CVE-2026-0002", "PkgName": "lodash", "InstalledVersion": "4.17.15",
+                 "CVSS": {"nvd": {"V3Score": "high"}}},
+                {"VulnerabilityID": "CVE-2026-0003", "PkgName": "lodash", "InstalledVersion": "4.17.15",
+                 "CVSS": {"nvd": {"V3Score": 9.8}}, "FixedVersion": "4.17.21"},
+            ]},
+        ]}
+        res = imports._trivy(data, "trivy-x.json")
+        self.assertEqual([(f["id"], f["cvss"]) for f in res.findings],
+                         [("CVE-2026-0001", None), ("CVE-2026-0002", None), ("CVE-2026-0003", 9.8)])
+        self.assertEqual(res.findings[2]["fixed"], "4.17.21")
+        self.assertIn("malformed Trivy result entry", " ".join(res.warnings))
+        self.assertIn("ignoring non-numeric CVSS score", " ".join(res.warnings))
+
+    def test_wrong_typed_grype_report_warns_not_crash(self):
+        data = {"source": "not-a-dict", "matches": [
+            "not-an-object",
+            {"vulnerability": {"id": "CVE-2026-0001", "cvss": [{"version": "3.1", "metrics": {"baseScore": "bad"}}]},
+             "artifact": {"name": "lodash", "version": "4.17.15", "type": "npm"}},
+            {"vulnerability": {"id": "CVE-2026-0002", "cvss": [{"version": "3.1", "metrics": {"baseScore": 7.5}}]},
+             "artifact": {"name": "lodash", "version": "4.17.15", "type": "npm"}},
+        ]}
+        res = imports._grype(data, "grype-x.json")
+        self.assertEqual([(f["id"], f["cvss"]) for f in res.findings],
+                         [("CVE-2026-0001", None), ("CVE-2026-0002", 7.5)])
+        self.assertIn("malformed Grype match entry", " ".join(res.warnings))
+        self.assertIn("ignoring non-numeric CVSS score", " ".join(res.warnings))
+
+    def test_wrong_typed_osv_scanner_report_warns_not_crash(self):
+        data = {"results": [
+            "not-an-object",
+            {"source": {"path": "app/package-lock.json"}, "packages": [
+                {"package": {"name": "lodash", "version": "4.17.15", "ecosystem": "npm"},
+                 "vulnerabilities": ["not-an-object",
+                                     {"id": "CVE-2021-23337", "aliases": ["GHSA-35jh-r3h4-6jhm"],
+                                      "summary": "s", "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
+                                                                    "ranges": [{"type": "ECOSYSTEM", "events": [
+                                                                        {"introduced": "0"}, {"fixed": "4.17.21"}]}]}]}]},
+            ]},
+        ]}
+        res = imports._osv_scanner(data, "osv-x.json")
+        self.assertEqual([(f["id"], f["fixed"]) for f in res.findings], [("CVE-2021-23337", "4.17.21")])
+        self.assertIn("malformed OSV-Scanner", " ".join(res.warnings))
+
+    def test_wrong_typed_nvd_response_warns_not_crash(self):
+        self.assertEqual(nvd._parse({"vulnerabilities": [{"cve": {"metrics": {
+            "cvssMetricV31": [{"type": "Primary", "cvssData": {"baseScore": "nope", "version": "3.1"}}]},
+            "references": []}}]}),
+            {"cvss": None, "version": None, "exploit_ref": False, "found": True})
+        self.assertEqual(nvd._parse({"vulnerabilities": [{"cve": {"metrics": {"cvssMetricV31": ["oops"]},
+                                                           "references": []}}]}),
+                         {"cvss": None, "version": None, "exploit_ref": False, "found": True})
+        self.assertEqual(nvd._parse(["not-a-dict"]),
+                         {"cvss": None, "version": None, "exploit_ref": False, "found": False})
+
+    def test_malformed_report_in_scan_is_a_warning(self):
+        (self.root / "trivy-x.json").write_text(json.dumps({
+            "SchemaVersion": 2, "ArtifactName": "img", "Results": [
+                {"Type": "npm", "Vulnerabilities": [
+                    {"VulnerabilityID": "CVE-2026-0001", "PkgName": "lodash", "InstalledVersion": "4.17.15",
+                     "CVSS": {"nvd": {"V3Score": "high"}}},
+                    {"VulnerabilityID": "CVE-2026-0002", "PkgName": "lodash", "InstalledVersion": "4.17.15",
+                     "CVSS": {"nvd": {"V3Score": 9.8}}, "FixedVersion": "4.17.21"},
+                ]},
+            ]}))
+        rec = scan.scan(str(self.root), offline=True, use_nvd=False)
+        text = " ".join(rec["warnings"])
+        self.assertIn("ignoring non-numeric CVSS score", text)
+        self.assertEqual({(f["id"], f["cvss"]) for f in rec["items"]},
+                         {("CVE-2026-0001", None), ("CVE-2026-0002", 9.8)})
+
+    def test_osv_pagination_repeating_token_stops(self):
+        calls = []
+
+        def fake(url, payload=None, headers=None, timeout=30):
+            calls.append(payload.get("page_token"))
+            return {"vulns": [{"id": "CVE-2026-0001"}], "next_page_token": "t1"}
+
+        with unittest.mock.patch.object(osv.net, "fetch_json", side_effect=fake):
+            ids, warn = osv._query_pages("lodash", "npm", "4.17.15", "t1")
+        self.assertEqual(ids, ["CVE-2026-0001"])
+        self.assertIn("repeated a page token", warn)
+        self.assertEqual(len(calls), 1)
+
+    def test_osv_pagination_page_cap(self):
+        n = [0]
+
+        def fake(url, payload=None, headers=None, timeout=30):
+            n[0] += 1
+            return {"vulns": [], "next_page_token": f"t{n[0]}"}
+
+        with unittest.mock.patch.object(osv.net, "fetch_json", side_effect=fake):
+            ids, warn = osv._query_pages("lodash", "npm", "4.17.15", "t0")
+        self.assertEqual(ids, [])
+        self.assertIn(f"exceeded {osv.MAX_PAGES} pages", warn)
+        self.assertEqual(n[0], osv.MAX_PAGES)
+
+    def test_osv_non_object_feed_response_is_an_error_not_a_crash(self):
+        with unittest.mock.patch.object(osv.net, "fetch_json", return_value=["not", "a", "dict"]):
+            res, st = osv.lookup([{"name": "lodash", "version": "4.17.15", "ecosystem": "npm"}])
+        self.assertEqual(res, {})
+        self.assertIn("non-object", st.error)
+
+    def test_malformed_recheck_date_does_not_crash_ranking(self):
+        it = new_finding(id="CVE-2026-0001", package="lodash", installed="4.17.15", fixed="4.17.21",
+                         ecosystem="npm")
+        ranked = rank.rank([it], decisions={"CVE-2026-0001": {"status": "deferred", "reason": "later",
+                                                               "recheck": "not-a-date", "package": None}},
+                           today="2026-11-10")
+        self.assertEqual(ranked[0]["status"], "defer_expired")  # bad date = treated as no usable date
+
+    def test_serve_rejects_out_of_range_port(self):
+        for bad in (0, 80, 70000, "abc"):
+            self.assertEqual(cli.cmd_serve(SimpleNamespace(port=bad)), 2)
+
+    def test_oversize_report_is_refused(self):
+        (self.root / "trivy-x.json").write_text('{"SchemaVersion": 2, "Results": []}')
+        with unittest.mock.patch.object(discovery, "MAX_REPORT_BYTES", 10):
+            self.assertEqual(discovery.sniff_report(self.root / "trivy-x.json"), (None, None))
+            with self.assertRaises(imports.ReportError) as cm:
+                imports.load(self.root / "trivy-x.json")
+            self.assertIn("larger than", str(cm.exception))
+
+    def test_malformed_or_oversize_queue_json_is_refused(self):
+        (state.path()).write_text("[1, 2, 3]")
+        with self.assertRaises(state.StateError):
+            state.load()
+        with unittest.mock.patch.object(state, "MAX_BYTES", 10):
+            (state.path()).write_text('{"schema": 1, "scans": {}, "decisions": {}}')
+            with self.assertRaises(state.StateError) as cm:
+                state.load()
+            self.assertIn("larger than", str(cm.exception))
 
 
 class HtmlEscapingFuzz(IsolatedTest):

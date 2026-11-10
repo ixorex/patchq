@@ -111,7 +111,10 @@ def _decide(args, status):
 
 def cmd_serve(args):
     from . import web
-    port = args.port or config.load()["port"]
+    port = args.port if args.port is not None else config.load()["port"]
+    if not isinstance(port, int) or not 1024 <= port <= 65535:
+        _err("port must be 1024-65535")
+        return 2
     try:
         httpd = web.make_server(port)
     except OSError as e:

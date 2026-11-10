@@ -20,36 +20,50 @@ DELAY_KEY = 0.7
 
 
 def _parse(data):
-    vulns = data.get("vulnerabilities") or []
-    if not vulns:
+    if not isinstance(data, dict):
         return {"cvss": None, "version": None, "exploit_ref": False, "found": False}
-    cve = vulns[0].get("cve") or {}
-    metrics = cve.get("metrics") or {}
+    vulns = data.get("vulnerabilities") if isinstance(data.get("vulnerabilities"), list) else []
+    if not vulns or not isinstance(vulns[0], dict):
+        return {"cvss": None, "version": None, "exploit_ref": False, "found": False}
+    cve = vulns[0].get("cve") if isinstance(vulns[0].get("cve"), dict) else {}
+    metrics = cve.get("metrics") if isinstance(cve.get("metrics"), dict) else {}
     score = version = None
     for k in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV40"):
-        rows = metrics.get(k) or []
-        rows = sorted(rows, key=lambda r: 0 if r.get("type") == "Primary" else 1)
+        rows = metrics.get(k) if isinstance(metrics.get(k), list) else []
+        rows = sorted((r for r in rows if isinstance(r, dict)),
+                      key=lambda r: 0 if r.get("type") == "Primary" else 1)
         for r in rows:
-            s = (r.get("cvssData") or {}).get("baseScore")
-            if s is not None:
-                score, version = float(s), (r.get("cvssData") or {}).get("version")
-                break
+            cvss_data = r.get("cvssData") if isinstance(r.get("cvssData"), dict) else {}
+            raw = cvss_data.get("baseScore")
+            if raw is None:
+                continue
+            try:
+                s = float(raw)
+            except (TypeError, ValueError):
+                continue  # non-numeric score: treat as no score, don't crash the scan
+            score, version = s, cvss_data.get("version")
+            break
         if score is not None:
             break
-    exploit = any("Exploit" in (ref.get("tags") or []) for ref in cve.get("references") or [])
+    refs = cve.get("references") if isinstance(cve.get("references"), list) else []
+    exploit = any("Exploit" in (ref.get("tags") or [])
+                  for ref in refs if isinstance(ref, dict))
     return {"cvss": score, "version": version, "exploit_ref": exploit, "found": True}
 
 
 def load(cves, offline=False, max_lookups=None):
     status = cache.Status("NVD")
     path = cache.cache_dir() / "nvd.json"
-    store = (cache.read_json(path) or {}).get("cves") or {}
+    _cached = cache.read_json(path)
+    store = _cached.get("cves") if isinstance(_cached, dict) else {}
+    store = store if isinstance(store, dict) else {}
     key = os.environ.get("NVD_API_KEY", "").strip()
     if max_lookups is None:
         max_lookups = 50 if key else 10
     delay = DELAY_KEY if key else DELAY_NO_KEY
     cves = [c.upper() for c in dict.fromkeys(cves) if is_cve(c)]
-    need = [c for c in cves if cache.age_seconds((store.get(c) or {}).get("fetched")) >= TTL]
+    need = [c for c in cves
+            if cache.age_seconds((store.get(c) if isinstance(store.get(c), dict) else {}).get("fetched")) >= TTL]
     skipped = 0
     if need and not offline:
         todo, skipped = need[:max_lookups], max(0, len(need) - max_lookups)

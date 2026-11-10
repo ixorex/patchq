@@ -8,5 +8,6 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+*.log
 .patchqueue/
 .DS_Store

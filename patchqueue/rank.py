@@ -106,7 +106,13 @@ def rank_item(item, decisions=None, inventory=None, today=None):
     if dec:
         st = dec.get("status")
         rc = dec.get("recheck")
-        rc_date = _dt.date.fromisoformat(rc) if rc else None
+        try:
+            rc_date = _dt.date.fromisoformat(rc) if rc else None
+        except (TypeError, ValueError):
+            # Hand-edited or stale queue.json: a bad recheck date must not crash
+            # the queue or dashboard — treat the decision as if it had no date.
+            # rc itself is kept, so the note still shows what was recorded.
+            rc_date = None
         if st == "patched":
             status = "patched_but_present"
             note = (f"you marked this patched on {dec.get('at', '')[:10]}, but {item.get('package')} "

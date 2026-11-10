@@ -38,14 +38,31 @@ def vuln_cache_path(vid):
     return cache.cache_dir("osv", "vuln") / f"{safe}.json"
 
 
+MAX_PAGES = 10
+
+
 def _query_pages(name, eco, version, token):
+    """Follow OSV pagination, capped: a repeating token must not hang the scan.
+
+    Returns (ids, warning or None)."""
     ids = []
+    seen = set()
+    pages = 0
     while token:
+        if token in seen:
+            return ids, "OSV pagination repeated a page token — stopped after the pages already fetched"
+        if pages >= MAX_PAGES:
+            return ids, f"OSV pagination exceeded {MAX_PAGES} pages — stopped, some results may be missing"
+        seen.add(token)
+        pages += 1
         data = net.fetch_json(QUERY_URL, {"package": {"name": name, "ecosystem": eco},
                                           "version": version, "page_token": token})
-        ids += [v["id"] for v in data.get("vulns") or [] if v.get("id")]
+        if not isinstance(data, dict):
+            raise net.FetchError("OSV query returned a non-object response")
+        ids += [v["id"] for v in data.get("vulns") or []
+                if isinstance(v, dict) and isinstance(v.get("id"), str) and v.get("id")]
         token = data.get("next_page_token")
-    return ids
+    return ids, None
 
 
 def lookup(packages, offline=False):
@@ -59,8 +76,10 @@ def lookup(packages, offline=False):
     ids_for, need = {}, []
     for k, name in wanted.items():
         c = cache.read_json(pkg_cache_path(*k))
+        c = c if isinstance(c, dict) else None
         if c and (offline or cache.age_seconds(c.get("fetched")) < TTL):
-            ids_for[k] = c.get("ids", [])
+            ids = c.get("ids")
+            ids_for[k] = [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
             status.used(c.get("fetched"))
         else:
             need.append((k, name, c))
@@ -74,14 +93,23 @@ def lookup(packages, offline=False):
             payload = {"queries": [{"package": {"name": name, "ecosystem": k[0]}, "version": k[2]}
                                    for k, name, _ in chunk]}
             try:
-                results = net.fetch_json(QUERYBATCH_URL, payload).get("results") or []
-                if len(results) != len(chunk):
+                batch = net.fetch_json(QUERYBATCH_URL, payload)
+                if not isinstance(batch, dict):
+                    raise net.FetchError("OSV querybatch returned a non-object response")
+                results = batch.get("results") or []
+                if not isinstance(results, list) or len(results) != len(chunk):
                     raise net.FetchError("querybatch returned a different number of results")
                 now = cache.now_iso()
                 for (k, name, _), res in zip(chunk, results):
-                    ids = [v["id"] for v in (res or {}).get("vulns") or [] if v.get("id")]
-                    if (res or {}).get("next_page_token"):
-                        ids += _query_pages(name, k[0], k[2], res["next_page_token"])
+                    if not isinstance(res, dict):
+                        raise net.FetchError("OSV querybatch returned a non-object result")
+                    ids = [v["id"] for v in res.get("vulns") or []
+                           if isinstance(v, dict) and isinstance(v.get("id"), str) and v.get("id")]
+                    if res.get("next_page_token"):
+                        page_ids, warn = _query_pages(name, k[0], k[2], res["next_page_token"])
+                        ids += page_ids
+                        if warn:
+                            status.note = warn
                     cache.write_json(pkg_cache_path(*k), {"fetched": now, "ids": sorted(set(ids))})
                     ids_for[k] = sorted(set(ids))
                 status.live = True
@@ -103,7 +131,8 @@ def _load_records(all_ids, offline, status):
     records, fetch_ids = {}, []
     for vid in all_ids:
         c = cache.read_json(vuln_cache_path(vid))
-        if c and (offline or cache.age_seconds(c.get("fetched")) < TTL):
+        c = c if isinstance(c, dict) else None
+        if c and isinstance(c.get("record"), dict) and (offline or cache.age_seconds(c.get("fetched")) < TTL):
             records[vid] = c["record"]
         else:
             fetch_ids.append((vid, c))
@@ -117,22 +146,26 @@ def _load_records(all_ids, offline, status):
         for vid, c in fetch_ids:
             try:
                 _, rec = futures[vid].result()
+                if not isinstance(rec, dict):
+                    raise net.FetchError(f"OSV returned a non-object record for {vid}")
                 cache.write_json(vuln_cache_path(vid), {"fetched": cache.now_iso(), "record": rec})
                 records[vid] = rec
                 status.live = True
             except net.FetchError as e:
                 errors.append(str(e))
-                records[vid] = c["record"] if c else {"id": vid, "_missing": True}
+                records[vid] = c["record"] if c and isinstance(c.get("record"), dict) else {"id": vid, "_missing": True}
         if errors:
             status.error = status.error or f"{len(errors)} advisory downloads failed ({errors[0]})"
     else:
         for vid, c in fetch_ids:
-            records[vid] = c["record"] if c else {"id": vid, "_missing": True}
+            records[vid] = c["record"] if c and isinstance(c.get("record"), dict) else {"id": vid, "_missing": True}
     return records
 
 
 # ------------------------------------------------------------ record -> finding
 def _event(e):
+    if not isinstance(e, dict):
+        return None
     for k in ("introduced", "fixed", "last_affected"):
         if k in e:
             return k, str(e[k])
@@ -179,9 +212,13 @@ def eval_range(events, version, eco):
 
 
 def _entries(record, eco, name):
+    if not isinstance(record, dict):
+        return
     n = model.norm_name(name, eco)
     for aff in record.get("affected") or []:
-        pkg = aff.get("package") or {}
+        if not isinstance(aff, dict):
+            continue
+        pkg = aff.get("package") if isinstance(aff.get("package"), dict) else {}
         if normalize_ecosystem(pkg.get("ecosystem", "")) == eco and model.norm_name(pkg.get("name", ""), eco) == n:
             yield aff
 
@@ -192,10 +229,12 @@ def fix_for(record, ecosystem, name, installed):
     containing, all_fixes = [], []
     for aff in _entries(record, eco, name):
         for rng in aff.get("ranges") or []:
+            if not isinstance(rng, dict):
+                continue
             if rng.get("type") not in ("ECOSYSTEM", "SEMVER"):
                 continue
-            events = rng.get("events") or []
-            all_fixes += [str(e["fixed"]) for e in events if "fixed" in e]
+            events = rng.get("events") if isinstance(rng.get("events"), list) else []
+            all_fixes += [str(e["fixed"]) for e in events if isinstance(e, dict) and "fixed" in e]
             affected, fix = eval_range(events, installed, eco)
             if affected:
                 containing.append(fix)
@@ -221,7 +260,11 @@ def fix_for(record, ecosystem, name, installed):
 
 def cvss_from_record(record):
     best = None
+    if not isinstance(record, dict):
+        return (None, None)
     for sev in record.get("severity") or []:
+        if not isinstance(sev, dict):
+            continue
         if str(sev.get("type", "")).startswith("CVSS_V3"):
             s = _cvss.base_score_v3(sev.get("score", ""))
             if s is not None and (best is None or s > best):
@@ -230,21 +273,28 @@ def cvss_from_record(record):
 
 
 def _summary(record):
-    s = record.get("summary") or ""
+    if not isinstance(record, dict):
+        return ""
+    s = record.get("summary") if isinstance(record.get("summary"), str) else ""
     if not s:
-        details = (record.get("details") or "").strip().splitlines()
-        s = details[0] if details else ""
+        details = record.get("details") if isinstance(record.get("details"), str) else ""
+        lines = details.strip().splitlines()
+        s = lines[0] if lines else ""
     return s[:300]
 
 
 def finding_from_osv(record, pkg, origin="osv", location=None):
+    if not isinstance(record, dict):
+        record = {"id": "", "_missing": True}
     eco = normalize_ecosystem(pkg["ecosystem"])
     rid = str(record.get("id", ""))
-    pid, aliases = model.primary_id(rid, record.get("aliases") or [])
+    aliases = record.get("aliases") if isinstance(record.get("aliases"), list) else []
+    pid, aliases = model.primary_id(rid, [a for a in aliases if isinstance(a, str)])
     missing = bool(record.get("_missing"))
     fixed = None if missing else fix_for(record, eco, pkg["name"], str(pkg["version"]))[0]
     score, src = (None, None) if missing else cvss_from_record(record)
-    poc = any(str(r.get("type", "")).upper() == "EVIDENCE" for r in record.get("references") or [])
+    poc = any(str(r.get("type", "")).upper() == "EVIDENCE"
+              for r in record.get("references") or [] if isinstance(r, dict))
     loc = location or {k: pkg.get(k) for k in ("file", "system", "dir", "direct", "dev", "kind", "approx")}
     return model.new_finding(
         id=pid, aliases=aliases, ecosystem=eco, package=pkg["name"], installed=str(pkg["version"]),

@@ -133,9 +133,14 @@ def discover(root: Path) -> Discovery:
     return d
 
 
+MAX_REPORT_BYTES = 50 * 1024 * 1024  # same cap as parsers/base.py read_text
+
+
 def sniff_report(path: Path):
     """Return 'trivy' | 'grype' | 'osv-scanner' | None for a parsed JSON file."""
     try:
+        if path.stat().st_size > MAX_REPORT_BYTES:
+            return None, None
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, ValueError, RecursionError):

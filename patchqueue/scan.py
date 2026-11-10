@@ -132,6 +132,7 @@ def _assemble(root_key, label, packages, images, systems, warnings, inv, reports
             warnings.append(str(e))
             continue
         covered |= rr.images
+        warnings += [f"{label_rp}: {w}" for w in rr.warnings]
         for fnd in rr.findings:
             for loc in fnd["locations"]:
                 if loc.get("image"):

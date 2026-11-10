@@ -26,18 +26,29 @@ def path():
     return cache.home() / "queue.json"
 
 
+MAX_BYTES = 50 * 1024 * 1024  # same cap as parsers/base.py read_text
+
+
 def load() -> dict:
     p = path()
     if not p.exists():
         return {"schema": SCHEMA, "scans": {}, "decisions": {}}
     try:
+        if p.stat().st_size > MAX_BYTES:
+            raise StateError(f"{p} is larger than {MAX_BYTES // (1024 * 1024)} MB — refusing to load it. "
+                             "Fix or move it; PatchQ won't overwrite it.")
         with open(p, encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, ValueError, RecursionError) as e:
         # Never overwrite a file we can't read: it holds the user's decisions.
         raise StateError(f"{p} is unreadable ({e}). Fix or move it; PatchQ won't overwrite it.")
+    if not isinstance(data, dict):
+        raise StateError(f"{p} is not a JSON object. Fix or move it; PatchQ won't overwrite it.")
     data.setdefault("scans", {})
     data.setdefault("decisions", {})
+    if not isinstance(data["scans"], dict) or not isinstance(data["decisions"], dict):
+        raise StateError(f"{p} has a malformed 'scans' or 'decisions' section (not an object). "
+                         "Fix or move it; PatchQ won't overwrite it.")
     data["schema"] = SCHEMA
     return data
 
