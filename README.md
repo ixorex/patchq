@@ -222,10 +222,6 @@ PyPI release (`pip install patchq`), GitHub Releases binaries, Homebrew; notific
 
 Never planned: network scanning, auto-patching, auto-merging, Windows OS patching, enterprise dashboards, an AI chatbot.
 
-## Support
-
-PatchQ is free forever. Donations keep it going: *add your GitHub Sponsors / Ko-fi link here before publishing.*
-
 ## Disclaimer
 
 PatchQ is a triage aid, not a guarantee. It ranks what it can see from public feeds. It cannot see private advisories, zero-days, or code you didn't tell it about.
